@@ -620,7 +620,7 @@ class StegosaurusApp(App):
 
             for ch_name, ch_data in analysis['channels'].items():
                 lsb = ch_data['lsb_ratio']
-                indicator = lsb['chi_square_indicator']
+                indicator = ch_data['chi_square_indicator']
 
                 if indicator < 0.1:
                     status = "✓ Normal"
@@ -638,7 +638,7 @@ class StegosaurusApp(App):
                     status,
                 )
 
-            max_ind = max(ch['lsb_ratio']['chi_square_indicator'] for ch in analysis['channels'].values())
+            max_ind = max(ch['chi_square_indicator'] for ch in analysis['channels'].values())
             if max_ind > 0.3:
                 log.write_line("[red]⚠ HIGH PROBABILITY OF HIDDEN DATA[/red]")
             elif max_ind > 0.1:
