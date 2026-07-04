@@ -41,7 +41,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Terminal UI (Textual)
-tui = ["textual>=0.40.0"]
+tui = ["textual>=0.40.0,<1.0"]
 # Web UI (NiceGUI + FastAPI)
 web = ["nicegui>=1.4.0", "fastapi>=0.100.0"]
 # Legacy web UI (Streamlit)
@@ -50,7 +50,7 @@ web-legacy = ["streamlit>=1.28.0"]
 crypto = ["cryptography>=41.0.0"]
 # Everything
 all = [
-    "textual>=0.40.0",
+    "textual>=0.40.0,<1.0",
     "nicegui>=1.4.0",
     "fastapi>=0.100.0",
     "streamlit>=1.28.0",
