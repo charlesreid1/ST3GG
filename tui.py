@@ -304,31 +304,28 @@ class StegosaurusApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Container(
-            Vertical(
-                Static(DINO_ASCII, id="dino-display"),
-                Button("🔐 Encode", id="btn-encode", classes="menu-button"),
-                Button("🔓 Decode", id="btn-decode", classes="menu-button"),
-                Button("🔍 Analyze", id="btn-analyze", classes="menu-button"),
-                Button("💉 Inject", id="btn-inject", classes="menu-button"),
-                Button("⚙️  Settings", id="btn-settings", classes="menu-button"),
-                Static("[dim]───────────────────[/dim]", classes="subtitle"),
-                Static(f"[dim]{TAGLINES[0]}[/dim]", classes="subtitle"),
-                id="sidebar",
-            ),
-            Vertical(
-                TabbedContent(
-                    TabPane("Home", self._home_content(), id="tab-home"),
-                    TabPane("Encode", self._encode_content(), id="tab-encode"),
-                    TabPane("Decode", self._decode_content(), id="tab-decode"),
-                    TabPane("Analyze", self._analyze_content(), id="tab-analyze"),
-                    TabPane("Inject", self._inject_content(), id="tab-inject"),
-                    id="main-tabs",
-                ),
-                id="content",
-            ),
-            id="main-container",
-        )
+        with Container(id="main-container"):
+            with Vertical(id="sidebar"):
+                yield Static(DINO_ASCII, id="dino-display")
+                yield Button("🔐 Encode", id="btn-encode", classes="menu-button")
+                yield Button("🔓 Decode", id="btn-decode", classes="menu-button")
+                yield Button("🔍 Analyze", id="btn-analyze", classes="menu-button")
+                yield Button("💉 Inject", id="btn-inject", classes="menu-button")
+                yield Button("⚙️  Settings", id="btn-settings", classes="menu-button")
+                yield Static("[dim]───────────────────[/dim]", classes="subtitle")
+                yield Static(f"[dim]{TAGLINES[0]}[/dim]", classes="subtitle")
+            with Vertical(id="content"):
+                with TabbedContent(id="main-tabs"):
+                    with TabPane("Home", id="tab-home"):
+                        yield from self._home_content()
+                    with TabPane("Encode", id="tab-encode"):
+                        yield from self._encode_content()
+                    with TabPane("Decode", id="tab-decode"):
+                        yield from self._decode_content()
+                    with TabPane("Analyze", id="tab-analyze"):
+                        yield from self._analyze_content()
+                    with TabPane("Inject", id="tab-inject"):
+                        yield from self._inject_content()
         yield Footer()
 
     def _home_content(self) -> ComposeResult:
@@ -392,7 +389,7 @@ class StegosaurusApp(App):
                 id="encode-data",
             ),
         )
-        yield Log(id="encode-log", highlight=True, markup=True)
+        yield Log(id="encode-log", highlight=True)
 
     def _decode_content(self) -> ComposeResult:
         yield Static("[cyan]═══ DECODE DATA ═══[/cyan]", classes="panel-title")
@@ -430,7 +427,7 @@ class StegosaurusApp(App):
                 ),
             ),
         )
-        yield Log(id="decode-log", highlight=True, markup=True)
+        yield Log(id="decode-log", highlight=True)
 
     def _analyze_content(self) -> ComposeResult:
         yield Static("[magenta]═══ ANALYZE IMAGE ═══[/magenta]", classes="panel-title")
@@ -440,7 +437,7 @@ class StegosaurusApp(App):
                 Button("🔍 Analyze", id="btn-do-analyze"),
             ),
             DataTable(id="analyze-results"),
-            Log(id="analyze-log", highlight=True, markup=True),
+            Log(id="analyze-log", highlight=True),
         )
 
     def _inject_content(self) -> ComposeResult:
