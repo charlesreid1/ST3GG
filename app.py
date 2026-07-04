@@ -484,7 +484,7 @@ elif mode == "🔍 Analyze":
                     st.markdown(f"**LSB 1s:** {lsb['ones']*100:.2f}%")
 
                     # Suspicious indicator
-                    indicator = lsb['chi_square_indicator']
+                    indicator = ch_data['chi_square_indicator']
                     if indicator < 0.1:
                         st.success(f"LSB looks natural ({indicator:.3f})")
                     elif indicator < 0.3:
