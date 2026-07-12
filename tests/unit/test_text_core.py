@@ -344,8 +344,8 @@ def test_confusable_fixture_from_browser():
 
 
 def test_directional_fixture_from_browser():
-    _skip_if_missing("directional_stego.txt")
-    cover = PREAMBLE
+    _skip_if_missing("directional_cover.txt", "directional_stego.txt")
+    cover = (FIXTURES / "directional_cover.txt").read_text(encoding="utf-8").rstrip("\n")
     secret = "flag{r1gh7_70_l3f7_0v3rr1d3}"
     fixture = (FIXTURES / "directional_stego.txt").read_text(encoding="utf-8").rstrip("\n")
     assert text_core.decode(fixture, "directional") == secret
