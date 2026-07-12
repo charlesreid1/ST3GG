@@ -48,6 +48,12 @@ web = ["nicegui>=1.4.0", "fastapi>=0.100.0"]
 web-legacy = ["streamlit>=1.28.0"]
 # AES-256-GCM encryption
 crypto = ["cryptography>=41.0.0"]
+# MCP server (HTTP transport, container-to-container use)
+mcp = [
+    "mcp>=1.0.0",
+    "uvicorn>=0.24.0",
+    "starlette>=0.31.0",
+]
 # Everything
 all = [
     "textual>=0.40.0,<1.0",
@@ -55,6 +61,9 @@ all = [
     "fastapi>=0.100.0",
     "streamlit>=1.28.0",
     "cryptography>=41.0.0",
+    "mcp>=1.0.0",
+    "uvicorn>=0.24.0",
+    "starlette>=0.31.0",
 ]
 
 [project.scripts]
@@ -62,6 +71,7 @@ stegg = "cli:main_cli"
 stegg-tui = "tui:main"
 stegg-web = "webui:main"
 stegg-cli = "stegg_cli:main"
+stegg-mcp = "st3ggmcp.server:main"
 
 [project.urls]
 Homepage = "https://ste.gg"
@@ -71,6 +81,25 @@ Issues = "https://github.com/elder-plinius/st3gg/issues"
 
 [tool.setuptools]
 py-modules = ["steg_core", "crypto", "analysis_tools", "cli", "tui", "webui", "app", "injector", "ascii_art", "stegg_cli"]
+packages = ["st3ggmcp"]
 
 [tool.setuptools.package-data]
 "*" = ["index.html", "f5stego-lib.js", "_headers", "wrangler.jsonc"]
+"st3ggmcp" = ["field_guide.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: takes multiple seconds (round-trip sweeps, brute-force)",
+    "crypto: requires the cryptography package",
+    "pipeline: end-to-end multi-tool pipeline test",
+    "regenerates_examples: writes artifacts under examples/pipelines/",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+addopts = "-ra --strict-markers"

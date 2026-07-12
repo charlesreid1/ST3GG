@@ -13,9 +13,9 @@ import traceback
 from pathlib import Path
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-EXAMPLES_DIR = Path(__file__).parent / 'examples'
+EXAMPLES_DIR = Path(__file__).parent.parent / 'examples'
 PLINIAN_DIVIDER = "⊰•-•✧•-•-⦑/L\\O/V\\E/\\P/L\\I/N\\Y/⦒-•-•✧•-•⊱"
 ORIGINAL_SECRET = "STEGOSAURUS WRECKS - Hidden message found! 🦕"
 

@@ -19,7 +19,7 @@ Run this before EVERY push. Tests 500+ assertions across:
 - README claim accuracy (7 checks)
 """
 import sys, os, struct, io, base64, wave, zipfile, re
-sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent))
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
 for m in list(sys.modules.keys()):
     if 'steg' in m: del sys.modules[m]
 
@@ -43,7 +43,7 @@ from analysis_tools import (
     decode_math_alphanumeric, decode_emoji_skin_tone,
 )
 
-EXAMPLES = Path(__file__).parent / 'examples'
+EXAMPLES = Path(__file__).parent.parent / 'examples'
 with open(EXAMPLES / 'generate_examples.py', 'r', encoding='utf-8') as f:
     for line in f:
         if line.strip().startswith('PLINIAN_DIVIDER'):
@@ -181,7 +181,7 @@ T("count>=109", len(examples) >= 109, f"{len(examples)}")
 
 # --- TEST 13: JS checks ---
 print("TEST 13: JS Consistency")
-with open(Path(__file__).parent / 'index.html') as f: html = f.read()
+with open(Path(__file__).parent.parent / 'index.html') as f: html = f.read()
 for p in ['R','G','B','A','RG','RB','RA','GB','GA','BA','RGB','RGA','RBA','GBA','RGBA']:
     T(f"preset:{p}", f"'{p}':" in html)
 for b in range(1, 9):
@@ -196,14 +196,14 @@ T("text_steg", "detect_text_steg" in html)
 T("pvd_tool", "pvd_decode" in html)
 T("f5_tool", "f5_decode" in html)
 T("opus_default", 'claude-opus-4.6" selected' in html)
-with open(Path(__file__).parent / '_headers') as f: T("csp_openrouter", "openrouter.ai" in f.read())
+with open(Path(__file__).parent.parent / '_headers') as f: T("csp_openrouter", "openrouter.ai" in f.read())
 
 # --- TEST 14-15: Config + README ---
 print("TEST 14: Config")
-with open(Path(__file__).parent / 'pyproject.toml') as f: pyp = f.read()
+with open(Path(__file__).parent.parent / 'pyproject.toml') as f: pyp = f.read()
 T("agpl", "AGPL-3.0" in pyp); T("pkg_name", '"stegg"' in pyp or "'stegg'" in pyp, "package not named stegg")
 print("TEST 15: README")
-with open(Path(__file__).parent / 'README.md') as f: rm = f.read()
+with open(Path(__file__).parent.parent / 'README.md') as f: rm = f.read()
 T("100+tech", "100+" in rm); T("ste.gg", "ste.gg" in rm); T("banner", "st3gg_banner" in rm)
 
 # --- TEST 16: BROWSER CANVAS SIMULATION ---
@@ -301,7 +301,7 @@ T("browser_semi_raw_path", s16_semi_raw > 0,
 
 # --- TEST 17: JS source checks specific to past bugs ---
 print("TEST 17: Regression Guards (JS source checks for past bugs)")
-with open(Path(__file__).parent / 'index.html') as f: html = f.read()
+with open(Path(__file__).parent.parent / 'index.html') as f: html = f.read()
 
 # The createImageBitmap fix must NOT be in the codebase (broke things twice)
 T("no_createImageBitmap_in_decode",

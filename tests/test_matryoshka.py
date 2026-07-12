@@ -18,8 +18,10 @@ import sys
 from PIL import Image
 import numpy as np
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Repo root is the parent of this tests/ directory. Needed only when this
+# file is run directly (`python test_matryoshka.py`); pytest's conftest.py
+# handles the same path insertion for the discovered case.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from steg_core import encode, decode, create_config, calculate_capacity
 
