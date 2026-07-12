@@ -501,6 +501,16 @@ def detect_unicode_steg(data: bytes) -> Dict[str, Any]:
             results['invisible_chars'] += 1
             results['found'] = True
 
+    # Unicode tag characters (U+E0000..U+E007F) \u2014 "invisible ink" carrier.
+    tag_count = 0
+    for ch in text:
+        code = ord(ch)
+        if 0xE0000 <= code <= 0xE007F:
+            tag_count += 1
+    if tag_count > 0:
+        results['invisible_chars'] += tag_count
+        results['found'] = True
+
     return results
 
 
