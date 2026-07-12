@@ -91,19 +91,7 @@ def test_encode_rejects_oversize_payload(small_carrier):
         encode(small_carrier, huge, config)
 
 
-@pytest.mark.parametrize("strategy", [
-    "sequential",
-    "interleaved",
-    pytest.param("spread", marks=pytest.mark.xfail(
-        reason="spread strategy does not currently round-trip via decode() — "
-               "the encoder writes to spread-out pixels but decode falls back to "
-               "auto-detect via detect_encoding, which only tries SEQUENTIAL/INTERLEAVED"
-    )),
-    pytest.param("randomized", marks=pytest.mark.xfail(
-        reason="randomized strategy does not currently round-trip via decode() — "
-               "same detect_encoding limitation as spread"
-    )),
-])
+@pytest.mark.parametrize("strategy", ["sequential", "interleaved", "spread", "randomized"])
 def test_strategies_roundtrip(medium_carrier, strategy):
     config = create_config(channels="RGB", bits=1, strategy=strategy, seed=42)
     encoded = encode(medium_carrier, PAYLOAD_TEXT, config)

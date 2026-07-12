@@ -508,12 +508,15 @@ def encode(
                     break
 
         else:
-            # Spread or randomized with interleaving
+            # Spread or randomized: derive the pixel order from the full image
+            # capacity, not from the current payload size, so decode (which
+            # doesn't know payload_length until after it parses the header) can
+            # regenerate the same prefix of indices. Encoder consumes only the
+            # first `slots_needed` positions; decoder walks the same first N.
             slots_needed = len(bit_units)
-            pixels_needed = (slots_needed + num_channels - 1) // num_channels
 
             pixel_indices = _generate_pixel_indices(
-                total_pixels, pixels_needed, config.strategy, config.seed
+                total_pixels, total_pixels, config.strategy, config.seed
             )
 
             bit_mask = _create_bit_mask(bits_per_ch, config.bit_offset)
@@ -730,10 +733,12 @@ def _extract_bit_units(
                 break
 
     else:
-        # Spread or randomized
-        pixels_needed = (num_units + num_channels - 1) // num_channels
+        # Spread or randomized: mirror the encoder — generate the pixel order
+        # over the full image capacity so the first `num_units` positions match
+        # what encode() wrote, regardless of what num_units was on the encode
+        # side. See the matching branch in encode().
         pixel_indices = _generate_pixel_indices(
-            total_pixels, pixels_needed, config.strategy, config.seed
+            total_pixels, total_pixels, config.strategy, config.seed
         )
 
         unit_idx = 0
