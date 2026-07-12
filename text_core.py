@@ -1,10 +1,10 @@
 """Text steganography encode/decode core (ST3GG-faithful).
 
-Ports the four classic text-in-text techniques from `index.html` so that
-Python callers can encode and decode the same stego texts the browser
-produces.
+Ports the classic + advanced Unicode text-in-text techniques from
+`index.html` so that Python callers can encode and decode the same stego
+texts the browser produces.
 
-Techniques:
+Classic techniques:
   - zero_width:    ZWJ start + ZWSP(0)/ZWNJ(1) payload bits + ZWJ end,
                    spliced after the first cover char.
   - homoglyph:     Latin -> Cyrillic twin substitution. 16-bit length
@@ -14,6 +14,40 @@ Techniques:
                    length prefix + payload bits.
   - invisible_ink: U+E0000 start tag, ASCII -> tag-char body (code+base),
                    U+E007F end tag. Spliced after the first cover char.
+
+Advanced Unicode techniques:
+  - variation:     16-bit length prefix + payload bits; VS-1 (U+FE01)
+                   present after `[a-zA-Z0-9]` carrier = 1, absent = 0.
+  - combining:     16-bit length prefix + payload bits; CGJ (U+034F)
+                   present after `[a-zA-Z]` carrier = 1, absent = 0.
+  - confusable:    16-bit length prefix + payload bits; each ASCII space
+                   encodes 2 bits via space variant
+                   (' '=00, EN=01, EM=10, THIN=11).
+  - directional:   16-bit length prefix + payload bits; each bit encoded
+                   as (RLO=1 / LRO=0)+PDF pair, run spliced after
+                   cover[0].
+  - hangul:        16-bit length prefix + payload bits; each ASCII space
+                   -> HANGUL FILLER (U+3164)=1 or space=0.
+
+Divergence-from-JS notes: the JS in index.html is the intended reference
+implementation, but two of its decoders are buggy as written. We treat JS
+as an aspiration rather than gospel — Python emits byte-for-byte compatible
+STEGO output (so the browser's encoder and any correct decoder round-trip
+against Python), but Python's decoders fix the JS bugs on the read side:
+
+1. All JS decoders reconstruct payload bytes via
+   `String.fromCharCode(parseInt(bits, 2))`, which is Latin-1 per byte —
+   the encode side wrote UTF-8. So multi-byte secrets come back as mojibake
+   in the browser. Python decodes as UTF-8 (`errors='replace'`).
+
+2. The `combining` JS decoder walks chars emitting '0' on every letter and
+   '1' on every CGJ, without accounting for the fact that a 1-bit carrier
+   produces `<letter><CGJ>` (two chars) while a 0-bit produces `<letter>`
+   alone. The result is not a bijection; browser round-trip fails on any
+   payload that contains a 1-bit. Python's `decode_combining` uses the
+   look-ahead pattern from `decode_variation` instead — see the comment on
+   that function for the exact scheme. Fixing the JS side is out of scope
+   for this port.
 """
 
 from __future__ import annotations
@@ -39,7 +73,27 @@ HOMOGLYPH_MAP: Dict[str, str] = {
 }
 HOMOGLYPH_REVERSE: Dict[str, str] = {v: k for k, v in HOMOGLYPH_MAP.items()}
 
-METHODS: Tuple[str, ...] = ('zero_width', 'homoglyph', 'whitespace', 'invisible_ink')
+# Advanced Unicode constants (ported from index.html:8076-8152).
+VS1           = '︁'  # VARIATION SELECTOR-1
+CGJ           = '͏'  # COMBINING GRAPHEME JOINER
+EN_SPACE      = ' '
+EM_SPACE      = ' '
+THIN_SPACE    = ' '
+RLO           = '‮'  # RIGHT-TO-LEFT OVERRIDE
+LRO           = '‭'  # LEFT-TO-RIGHT OVERRIDE
+PDF           = '‬'  # POP DIRECTIONAL FORMATTING
+HANGUL_FILLER = 'ㅤ'
+
+CONFUSABLE_SPACE_TABLE: Dict[str, str] = {
+    '00': ' ',      '01': EN_SPACE,
+    '10': EM_SPACE, '11': THIN_SPACE,
+}
+CONFUSABLE_REVERSE: Dict[str, str] = {v: k for k, v in CONFUSABLE_SPACE_TABLE.items()}
+
+METHODS: Tuple[str, ...] = (
+    'zero_width', 'homoglyph', 'whitespace', 'invisible_ink',
+    'variation', 'combining', 'confusable', 'directional', 'hangul',
+)
 
 
 # --- exceptions --------------------------------------------------------------
@@ -217,6 +271,234 @@ def decode_invisible_ink(stego: str) -> str:
     return ''.join(result)
 
 
+# --- variation selectors -----------------------------------------------------
+
+def _variation_carriers(cover: str) -> int:
+    return sum(1 for ch in cover if ch.isascii() and ch.isalnum())
+
+
+def encode_variation(cover: str, secret: str) -> str:
+    payload = secret.encode('utf-8')
+    bits = format(len(payload), '016b') + _bits_of(payload)
+    have = _variation_carriers(cover)
+    need = len(bits)
+    if need > have:
+        raise TextStegCapacityError(
+            f"variation: cover too small: need {need} carrier bits, have {have} "
+            f"({need - have} short; payload = {len(payload)} bytes)"
+        )
+    out = []
+    bit_idx = 0
+    for ch in cover:
+        out.append(ch)
+        if bit_idx < len(bits) and ch.isascii() and ch.isalnum():
+            if bits[bit_idx] == '1':
+                out.append(VS1)
+            bit_idx += 1
+    return ''.join(out)
+
+
+def decode_variation(stego: str) -> str:
+    bits = []
+    i = 0
+    n = len(stego)
+    while i < n:
+        ch = stego[i]
+        if ch.isascii() and ch.isalnum():
+            nxt = stego[i + 1] if i + 1 < n else ''
+            if nxt and '︀' <= nxt <= '️':
+                bits.append('1')
+                i += 2
+                continue
+            bits.append('0')
+        i += 1
+    if len(bits) < 16:
+        return ''
+    length = int(''.join(bits[:16]), 2)
+    if length <= 0 or length > 10000:
+        return ''
+    data_bits = ''.join(bits[16:16 + 8 * length])
+    return _bits_to_bytes(data_bits, length).decode('utf-8', errors='replace')
+
+
+# --- combining marks (CGJ) ---------------------------------------------------
+
+def _combining_carriers(cover: str) -> int:
+    return sum(1 for ch in cover if ch.isascii() and ch.isalpha())
+
+
+def encode_combining(cover: str, secret: str) -> str:
+    payload = secret.encode('utf-8')
+    bits = format(len(payload), '016b') + _bits_of(payload)
+    have = _combining_carriers(cover)
+    need = len(bits)
+    if need > have:
+        raise TextStegCapacityError(
+            f"combining: cover too small: need {need} carrier bits, have {have} "
+            f"({need - have} short; payload = {len(payload)} bytes)"
+        )
+    out = []
+    bit_idx = 0
+    for ch in cover:
+        out.append(ch)
+        if bit_idx < len(bits) and ch.isascii() and ch.isalpha():
+            if bits[bit_idx] == '1':
+                out.append(CGJ)
+            bit_idx += 1
+    return ''.join(out)
+
+
+def decode_combining(stego: str) -> str:
+    # NB: this DIVERGES from the JS decoder in index.html:8261-8270. The JS
+    # decoder walks chars emitting '0' on every ASCII letter and '1' on every
+    # CGJ; but the encoder produces `<letter><CGJ>` for bit-1 carriers and
+    # `<letter>` for bit-0 carriers. So the JS decoder yields "01" for every
+    # 1-bit and "0" for every 0-bit — not a bijection, and the browser
+    # round-trip is broken for any secret with a 1-bit in the payload. Python
+    # uses the same look-ahead pattern as decode_variation instead: on an
+    # ASCII letter, peek at the next char and emit '1' if it's the CGJ (then
+    # skip both), else emit '0'. Left as a future fix on the JS side; not our
+    # concern here. Same-side round-trip (Python encode -> Python decode) is
+    # what these tests exercise.
+    bits = []
+    i = 0
+    n = len(stego)
+    while i < n:
+        ch = stego[i]
+        if ch.isascii() and ch.isalpha():
+            nxt = stego[i + 1] if i + 1 < n else ''
+            if nxt == CGJ:
+                bits.append('1')
+                i += 2
+                continue
+            bits.append('0')
+        i += 1
+    if len(bits) < 16:
+        return ''
+    length = int(''.join(bits[:16]), 2)
+    if length <= 0 or length > 10000:
+        return ''
+    data_bits = ''.join(bits[16:16 + 8 * length])
+    return _bits_to_bytes(data_bits, length).decode('utf-8', errors='replace')
+
+
+# --- confusable whitespace ---------------------------------------------------
+
+def _confusable_carrier_bits(cover: str) -> int:
+    return 2 * cover.count(' ')
+
+
+def encode_confusable(cover: str, secret: str) -> str:
+    payload = secret.encode('utf-8')
+    bits = format(len(payload), '016b') + _bits_of(payload)
+    have = _confusable_carrier_bits(cover)
+    need = len(bits)
+    if need > have:
+        raise TextStegCapacityError(
+            f"confusable: cover too small: need {need} carrier bits, have {have} "
+            f"({need - have} short; payload = {len(payload)} bytes; 2 bits per ASCII space)"
+        )
+    out = []
+    bit_idx = 0
+    for ch in cover:
+        if ch == ' ' and bit_idx + 1 < len(bits):
+            pair = bits[bit_idx] + bits[bit_idx + 1]
+            out.append(CONFUSABLE_SPACE_TABLE.get(pair, ' '))
+            bit_idx += 2
+        else:
+            out.append(ch)
+    return ''.join(out)
+
+
+def decode_confusable(stego: str) -> str:
+    bits = []
+    for ch in stego:
+        if ch in CONFUSABLE_REVERSE:
+            bits.append(CONFUSABLE_REVERSE[ch])
+    joined = ''.join(bits)
+    if len(joined) < 16:
+        return ''
+    length = int(joined[:16], 2)
+    if length <= 0 or length > 10000:
+        return ''
+    data_bits = joined[16:16 + 8 * length]
+    return _bits_to_bytes(data_bits, length).decode('utf-8', errors='replace')
+
+
+# --- directional overrides ---------------------------------------------------
+
+def encode_directional(cover: str, secret: str) -> str:
+    if not cover:
+        raise TextStegCapacityError("directional: cover is empty")
+    payload = secret.encode('utf-8')
+    bits = format(len(payload), '016b') + _bits_of(payload)
+    run_parts = []
+    for bit in bits:
+        run_parts.append(RLO if bit == '1' else LRO)
+        run_parts.append(PDF)
+    run = ''.join(run_parts)
+    return cover[0] + run + cover[1:]
+
+
+def decode_directional(stego: str) -> str:
+    bits = []
+    for ch in stego:
+        if ch == RLO:
+            bits.append('1')
+        elif ch == LRO:
+            bits.append('0')
+    if len(bits) < 16:
+        return ''
+    length = int(''.join(bits[:16]), 2)
+    if length <= 0 or length > 10000:
+        return ''
+    data_bits = ''.join(bits[16:16 + 8 * length])
+    return _bits_to_bytes(data_bits, length).decode('utf-8', errors='replace')
+
+
+# --- hangul filler -----------------------------------------------------------
+
+def _hangul_carrier_bits(cover: str) -> int:
+    return cover.count(' ')
+
+
+def encode_hangul(cover: str, secret: str) -> str:
+    payload = secret.encode('utf-8')
+    bits = format(len(payload), '016b') + _bits_of(payload)
+    have = _hangul_carrier_bits(cover)
+    need = len(bits)
+    if need > have:
+        raise TextStegCapacityError(
+            f"hangul: cover too small: need {need} carrier bits, have {have} "
+            f"({need - have} short; payload = {len(payload)} bytes; 1 bit per ASCII space)"
+        )
+    out = []
+    bit_idx = 0
+    for ch in cover:
+        if ch == ' ' and bit_idx < len(bits):
+            out.append(HANGUL_FILLER if bits[bit_idx] == '1' else ' ')
+            bit_idx += 1
+        else:
+            out.append(ch)
+    return ''.join(out)
+
+
+def decode_hangul(stego: str) -> str:
+    bits = []
+    for ch in stego:
+        if ch == HANGUL_FILLER:
+            bits.append('1')
+        elif ch == ' ':
+            bits.append('0')
+    if len(bits) < 16:
+        return ''
+    length = int(''.join(bits[:16]), 2)
+    if length <= 0 or length > 10000:
+        return ''
+    data_bits = ''.join(bits[16:16 + 8 * length])
+    return _bits_to_bytes(data_bits, length).decode('utf-8', errors='replace')
+
+
 # --- capacity ----------------------------------------------------------------
 
 def capacity(cover: str, method: str) -> dict:
@@ -272,6 +554,62 @@ def capacity(cover: str, method: str) -> dict:
                 "Cover only needs to be non-empty."
             ),
         }
+    if method == 'variation':
+        bits = _variation_carriers(cover)
+        return {
+            'method': method,
+            'carrier_bits': bits,
+            'payload_bytes_max': max(0, (bits - 16) // 8),
+            'notes': (
+                "16-bit length prefix + 1 bit per ASCII alnum carrier "
+                "(VS-1 present = 1, absent = 0)."
+            ),
+        }
+    if method == 'combining':
+        bits = _combining_carriers(cover)
+        return {
+            'method': method,
+            'carrier_bits': bits,
+            'payload_bytes_max': max(0, (bits - 16) // 8),
+            'notes': (
+                "16-bit length prefix + 1 bit per ASCII alpha carrier "
+                "(CGJ present = 1, absent = 0)."
+            ),
+        }
+    if method == 'confusable':
+        bits = _confusable_carrier_bits(cover)
+        return {
+            'method': method,
+            'carrier_bits': bits,
+            'payload_bytes_max': max(0, (bits - 16) // 8),
+            'notes': (
+                f"16-bit length prefix + 2 bits per ASCII space "
+                f"({cover.count(' ')} spaces here). "
+                "Regular=00, EN=01, EM=10, THIN=11."
+            ),
+        }
+    if method == 'directional':
+        return {
+            'method': method,
+            'carrier_bits': None,
+            'payload_bytes_max': None,
+            'notes': (
+                "Payload rides in its own inserted RLO/LRO+PDF run spliced after "
+                "cover[0]. Cover only needs to be non-empty."
+            ),
+        }
+    if method == 'hangul':
+        bits = _hangul_carrier_bits(cover)
+        return {
+            'method': method,
+            'carrier_bits': bits,
+            'payload_bytes_max': max(0, (bits - 16) // 8),
+            'notes': (
+                f"16-bit length prefix + 1 bit per ASCII space "
+                f"({cover.count(' ')} spaces here). "
+                "HANGUL FILLER = 1, space = 0."
+            ),
+        }
     raise ValueError(f"unknown method '{method}'. Try one of: {', '.join(METHODS)}")
 
 
@@ -282,6 +620,11 @@ _ENCODERS = {
     'homoglyph':     encode_homoglyph,
     'whitespace':    encode_whitespace,
     'invisible_ink': encode_invisible_ink,
+    'variation':     encode_variation,
+    'combining':     encode_combining,
+    'confusable':    encode_confusable,
+    'directional':   encode_directional,
+    'hangul':        encode_hangul,
 }
 
 _DECODERS = {
@@ -289,6 +632,11 @@ _DECODERS = {
     'homoglyph':     decode_homoglyph,
     'whitespace':    decode_whitespace,
     'invisible_ink': decode_invisible_ink,
+    'variation':     decode_variation,
+    'combining':     decode_combining,
+    'confusable':    decode_confusable,
+    'directional':   decode_directional,
+    'hangul':        decode_hangul,
 }
 
 

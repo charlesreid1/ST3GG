@@ -2077,6 +2077,43 @@ def detect_confusable_whitespace(data: bytes) -> Dict[str, Any]:
     return results
 
 
+def detect_directional_override_steg(data: bytes) -> Dict[str, Any]:
+    """Detect steganography via directional override characters (RLO/LRO/PDF)."""
+    results = {'found': False, 'rlo': 0, 'lro': 0, 'pdf': 0}
+    try:
+        text = data.decode('utf-8', errors='ignore')
+    except Exception:
+        return results
+
+    for ch in text:
+        if ch == '‮':
+            results['rlo'] += 1
+        elif ch == '‭':
+            results['lro'] += 1
+        elif ch == '‬':
+            results['pdf'] += 1
+
+    pairs = min(results['rlo'] + results['lro'], results['pdf'])
+    results['pairs'] = pairs
+    if pairs > 3:
+        results['found'] = True
+    return results
+
+
+def detect_hangul_filler_steg(data: bytes) -> Dict[str, Any]:
+    """Detect steganography via HANGUL FILLER (U+3164) sprinkled at word gaps."""
+    results = {'found': False, 'count': 0}
+    try:
+        text = data.decode('utf-8', errors='ignore')
+    except Exception:
+        return results
+
+    results['count'] = text.count('ㅤ')
+    if results['count'] > 3:
+        results['found'] = True
+    return results
+
+
 def detect_emoji_steg(data: bytes) -> Dict[str, Any]:
     """Detect emoji substitution steganography patterns."""
     results = {'found': False, 'emoji_count': 0, 'pattern_detected': False}
@@ -2784,6 +2821,8 @@ def _register_all_tools():
     TOOL_REGISTRY.register('detect_variation_selector_steg', detect_variation_selector_steg)
     TOOL_REGISTRY.register('detect_combining_mark_steg', detect_combining_mark_steg)
     TOOL_REGISTRY.register('detect_confusable_whitespace', detect_confusable_whitespace)
+    TOOL_REGISTRY.register('detect_directional_override_steg', detect_directional_override_steg)
+    TOOL_REGISTRY.register('detect_hangul_filler_steg', detect_hangul_filler_steg)
     TOOL_REGISTRY.register('detect_emoji_steg', detect_emoji_steg)
     TOOL_REGISTRY.register('detect_capitalization_steg', detect_capitalization_steg)
     # Advanced steganalysis

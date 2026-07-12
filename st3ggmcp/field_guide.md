@@ -227,16 +227,21 @@ You have image encoders and text encoders. Image encoders write to `output_path`
 
 - `stegg_encode_manual` for LSB hiding. Requires `channels` (R/G/B/A/RG/RB/GB/RGB/RGBA), `bits_per_channel` (1-8, prefer 1 or 2 for stealth), and `strategy` (sequential, interleaved, spread, randomized). Optional `seed` for randomized traversal, optional `compress` toggle, optional `output_path`. Capacity is checked up front; oversize payloads bounce with a clear error. **No password parameter yet**. Do not promise one.
 - `stegg_encode_metadata` for chunk-based hiding. Pick `chunk_type`: `tEXt` (plain), `zTXt` (compressed), `iTXt` (international, allows UTF-8), or `private` (with a 4-character `private_chunk_name`). Text chunks require a `keyword`. Payload capacity is effectively unbounded; not stealthy against a chunk dump, but extremely common in real-world CTFs.
-- `stegg_text_encode` / `stegg_text_decode` / `stegg_text_capacity` for text-in-text steg. Method is one of `zero_width`, `homoglyph`, `whitespace`, `invisible_ink`. Cover is inline (`cover_text`) or a UTF-8 file (`cover_path`); stego is returned inline unless `output_path` is set. Round-trip-compatible with the browser Text Lab in `index.html`. For homoglyph and whitespace, run `stegg_text_capacity` first if you're not sure the cover is big enough — both use a 16-bit length prefix so short covers bounce with a `TextStegCapacityError`.
+- `stegg_text_encode` / `stegg_text_decode` / `stegg_text_capacity` for text-in-text steg. Method is one of `zero_width`, `homoglyph`, `whitespace`, `invisible_ink`, `variation`, `combining`, `confusable`, `directional`, `hangul`. Cover is inline (`cover_text`) or a UTF-8 file (`cover_path`); stego is returned inline unless `output_path` is set. Round-trip-compatible with the browser Text Lab in `index.html`. For methods with a 16-bit length prefix (homoglyph, whitespace, variation, combining, confusable, hangul), run `stegg_text_capacity` first if you're not sure the cover is big enough — short covers bounce with a `TextStegCapacityError`.
 
 Text technique matrix (encode + decode + detect):
 
-| Technique      | Encode / Decode              | Detector (`stegg_text_steg`)   | Framing                                    |
-|----------------|------------------------------|--------------------------------|--------------------------------------------|
-| zero_width     | `stegg_text_encode` / `_decode` | `detect_unicode_steg`         | ZWJ start + ZWSP(0)/ZWNJ(1) + ZWJ end      |
-| homoglyph      | `stegg_text_encode` / `_decode` | `detect_homoglyph_steg`       | 16-bit length prefix + payload bits        |
-| whitespace     | `stegg_text_encode` / `_decode` | `detect_whitespace_steg`      | 16-bit length prefix, 8 bits/line trailing |
-| invisible_ink  | `stegg_text_encode` / `_decode` | `detect_unicode_steg` (tag chars) | U+E0000 start + ASCII→tag + U+E007F end |
+| Technique      | Encode / Decode              | Detector (`stegg_text_steg`)         | Framing                                    |
+|----------------|------------------------------|--------------------------------------|--------------------------------------------|
+| zero_width     | `stegg_text_encode` / `_decode` | `detect_unicode_steg`             | ZWJ start + ZWSP(0)/ZWNJ(1) + ZWJ end      |
+| homoglyph      | `stegg_text_encode` / `_decode` | `detect_homoglyph_steg`           | 16-bit length prefix + payload bits        |
+| whitespace     | `stegg_text_encode` / `_decode` | `detect_whitespace_steg`          | 16-bit length prefix, 8 bits/line trailing |
+| invisible_ink  | `stegg_text_encode` / `_decode` | `detect_unicode_steg` (tag chars) | U+E0000 start + ASCII→tag + U+E007F end    |
+| variation      | `stegg_text_encode` / `_decode` | `detect_variation_selector_steg`  | 16-bit length prefix; VS-1 after alnum = 1 |
+| combining      | `stegg_text_encode` / `_decode` | `detect_combining_mark_steg`      | 16-bit length prefix; CGJ after alpha = 1  |
+| confusable     | `stegg_text_encode` / `_decode` | `detect_confusable_whitespace`    | 16-bit length prefix; 2 bits per ASCII space via variant |
+| directional    | `stegg_text_encode` / `_decode` | `detect_directional_override_steg` | 16-bit length prefix; RLO/LRO+PDF run     |
+| hangul         | `stegg_text_encode` / `_decode` | `detect_hangul_filler_steg`       | 16-bit length prefix; U+3164 = 1, space = 0 |
 
 When picking a carrier: LSB survives lossless re-save but dies on JPEG recompression or cropping; PNG metadata survives cropping and re-save but any pipeline that strips chunks kills it; text steg survives copy/paste and most containers but dies to Unicode normalization, whitespace-trim, or homoglyph-normalization filters. Announce the smuggling operation, cite the specific technique and config, then encode.
 

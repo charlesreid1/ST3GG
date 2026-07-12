@@ -22,6 +22,8 @@ EXPECTED_TOOLS = {
     "detect_variation_selector_steg",
     "detect_combining_mark_steg",
     "detect_confusable_whitespace",
+    "detect_directional_override_steg",
+    "detect_hangul_filler_steg",
     "detect_emoji_steg",
     "detect_capitalization_steg",
     "rs_analysis",

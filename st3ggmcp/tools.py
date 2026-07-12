@@ -893,6 +893,8 @@ _TEXT_STEG_DETECTORS = (
     "detect_variation_selector_steg",
     "detect_combining_mark_steg",
     "detect_confusable_whitespace",
+    "detect_directional_override_steg",
+    "detect_hangul_filler_steg",
     "detect_capitalization_steg",
     "detect_emoji_steg",
     "decode_directional_override",
@@ -1014,8 +1016,9 @@ async def execute_list_techniques(**_kw) -> str:
         "encode_manual": "Hide a payload via LSB with an explicit channels/bits/strategy recipe.",
         "encode_metadata": "Hide a payload in a PNG text (tEXt/iTXt/zTXt) or private chunk.",
         "text_encode": (
-            "Hide a payload in plain text via zero_width, homoglyph, whitespace, or "
-            "invisible_ink. Round-trip-compatible with the browser Text Lab."
+            "Hide a payload in plain text via zero_width, homoglyph, whitespace, "
+            "invisible_ink, variation, combining, confusable, directional, or "
+            "hangul. Round-trip-compatible with the browser Text Lab."
         ),
         "text_decode": "Recover a payload from a stego text produced by text_encode (or the browser).",
         "text_capacity": "Pre-flight: how many payload bytes a given cover can carry under a text-steg method.",
@@ -1310,8 +1313,9 @@ TOOL_SCHEMAS: dict[str, dict] = {
     },
     "stegg_text_encode": {
         "description": (
-            "Hide a secret string inside a cover text using a classic text-steg technique. "
-            "Method must be one of: zero_width, homoglyph, whitespace, invisible_ink. "
+            "Hide a secret string inside a cover text using a text-steg technique. "
+            "Method must be one of: zero_width, homoglyph, whitespace, invisible_ink, "
+            "variation, combining, confusable, directional, hangul. "
             "Supply the cover as either inline text (cover_text) or a file path (cover_path). "
             "Returns the stego text inline, or writes it to output_path if given. "
             "Round-trip-compatible with the browser Text Lab in index.html."
@@ -1319,7 +1323,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "inputSchema": {
             "type": "object",
             "properties": {
-                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, or invisible_ink."},
+                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, or hangul."},
                 "secret": {"type": "string", "description": "The secret string to hide."},
                 "cover_text": {"type": "string", "description": "Cover text supplied inline."},
                 "cover_path": {"type": "string", "description": "Filesystem path to a UTF-8 cover file (alternative to cover_text)."},
@@ -1332,13 +1336,14 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": (
             "Recover a hidden secret from a stego text produced by stegg_text_encode "
             "(or by the browser Text Lab). Method must be one of: zero_width, homoglyph, "
-            "whitespace, invisible_ink. Supply the stego as inline text (stego_text) or "
-            "a file path (stego_path)."
+            "whitespace, invisible_ink, variation, combining, confusable, directional, "
+            "hangul. Supply the stego as inline text (stego_text) or a file path "
+            "(stego_path)."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, or invisible_ink."},
+                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, or hangul."},
                 "stego_text": {"type": "string", "description": "Stego text supplied inline."},
                 "stego_path": {"type": "string", "description": "Filesystem path to a UTF-8 stego file (alternative to stego_text)."},
             },
@@ -1348,13 +1353,14 @@ TOOL_SCHEMAS: dict[str, dict] = {
     "stegg_text_capacity": {
         "description": (
             "Pre-flight: how many payload bytes will fit in this cover under this method. "
-            "Use before stegg_text_encode when the cover might be too small (homoglyph and "
-            "whitespace especially — both use a 16-bit length prefix)."
+            "Use before stegg_text_encode when the cover might be too small. Most methods "
+            "(homoglyph, whitespace, variation, combining, confusable, hangul) use a "
+            "16-bit length prefix and will raise TextStegCapacityError on undersized covers."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, or invisible_ink."},
+                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, or hangul."},
                 "cover_text": {"type": "string", "description": "Cover text supplied inline."},
                 "cover_path": {"type": "string", "description": "Filesystem path to a UTF-8 cover file (alternative to cover_text)."},
             },
