@@ -86,3 +86,20 @@ packages = ["st3ggmcp"]
 [tool.setuptools.package-data]
 "*" = ["index.html", "f5stego-lib.js", "_headers", "wrangler.jsonc"]
 "st3ggmcp" = ["field_guide.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: takes multiple seconds (round-trip sweeps, brute-force)",
+    "crypto: requires the cryptography package",
+    "pipeline: end-to-end multi-tool pipeline test",
+    "regenerates_examples: writes artifacts under examples/pipelines/",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+addopts = "-ra --strict-markers"
