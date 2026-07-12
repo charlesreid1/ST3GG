@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import analysis_tools as at
 import text_core
+
+FIXTURES = Path(__file__).parent / "fixtures" / "text_core"
 
 
 PREAMBLE = (
@@ -145,3 +149,61 @@ def test_methods_tuple_is_the_four():
     assert set(text_core.METHODS) == {
         "zero_width", "homoglyph", "whitespace", "invisible_ink",
     }
+
+
+# --- cross-language fixtures (browser Text Lab in index.html) ----------------
+#
+# Each fixture is a stego text produced by the browser encoder for a known
+# (cover, secret) pair. Two assertions per technique:
+#   1. text_core.decode(fixture) == secret   (Python reads what the browser wrote)
+#   2. text_core.encode(cover, secret) == fixture  (Python writes the same bytes)
+# Divergence is a Python port bug; the JS is the source of truth.
+
+def test_zero_width_fixture_from_browser():
+    cover = (
+        "We the People of the United States, in Order to form a more perfect Union, "
+        "establish Justice, insure domestic Tranquility, provide for the common defence, "
+        "promote the general Welfare, and secure the Blessings of Liberty to ourselves "
+        "and our Posterity, do ordain and establish this Constitution for the United "
+        "States of America."
+    )
+    secret = "flag{zer0_w1dth}"
+    fixture = (FIXTURES / "zero_width_stego.txt").read_text(encoding="utf-8")
+
+    assert text_core.decode(fixture, "zero_width") == secret
+    assert text_core.encode(cover, secret, "zero_width") == fixture
+
+
+def test_homoglyph_fixture_from_browser():
+    cover = (FIXTURES / "homoglyph_cover.txt").read_text(encoding="utf-8")
+    secret = "flag{h0m0glyphs_l00k_alik3}"
+    fixture = (FIXTURES / "homoglyph_stego.txt").read_text(encoding="utf-8")
+
+    assert text_core.decode(fixture, "homoglyph") == secret
+    assert text_core.encode(cover, secret, "homoglyph") == fixture
+
+
+def test_whitespace_fixture_from_browser():
+    cover = (FIXTURES / "whitespace_cover.txt").read_text(encoding="utf-8")
+    secret = "flag{wh1t3sp4c3_is_f0r_all_c0l0rz}"
+    fixture = (FIXTURES / "whitespace_stego.txt").read_text(encoding="utf-8")
+
+    assert text_core.decode(fixture, "whitespace") == secret
+    assert text_core.encode(cover, secret, "whitespace") == fixture
+
+
+def test_invisible_ink_fixture_from_browser():
+    cover = (
+        "It is essential to such a government, that it be derived from the great body "
+        "of the society, not from an inconsiderable proportion, or a favoured class of "
+        "it; otherwise a handful of tyrannical nobles, exercising their oppressions by "
+        "a delegation of their powers, might aspire to the rank of republicans, and "
+        "claim for their government the honourable title of republic."
+    )
+    secret = "flag{invi5ibi7ity_c70ak_4ctiv4t3d}"
+    # rstrip("\n") because writing the stego to a text file adds a
+    # POSIX-conventional trailing newline that the encoder itself doesn't emit.
+    fixture = (FIXTURES / "invisible_ink_stego.txt").read_text(encoding="utf-8").rstrip("\n")
+
+    assert text_core.decode(fixture, "invisible_ink") == secret
+    assert text_core.encode(cover, secret, "invisible_ink") == fixture
