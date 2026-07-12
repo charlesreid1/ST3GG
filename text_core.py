@@ -102,7 +102,7 @@ def encode_homoglyph(cover: str, secret: str) -> str:
     need = len(bits)
     if need > have:
         raise TextStegCapacityError(
-            f"homoglyph: cover too small — need {need} carrier bits, have {have} "
+            f"homoglyph: cover too small: need {need} carrier bits, have {have} "
             f"({need - have} short; payload = {len(payload)} bytes)"
         )
     out = []
@@ -146,7 +146,7 @@ def encode_whitespace(cover: str, secret: str) -> str:
     need = len(bits)
     if need > have:
         raise TextStegCapacityError(
-            f"whitespace: cover too small — need {need} carrier bits, have {have} "
+            f"whitespace: cover too small: need {need} carrier bits, have {have} "
             f"({need - have} short; payload = {len(payload)} bytes; "
             f"add more lines or shorten payload)"
         )
@@ -225,7 +225,7 @@ def capacity(cover: str, method: str) -> dict:
     Fields: method, carrier_bits, payload_bytes_max, notes.
     """
     if method == 'zero_width':
-        # zero_width has no length prefix — its capacity is effectively unbounded
+        # zero_width has no length prefix; its capacity is effectively unbounded
         # by the cover (payload rides inside its own delimited span), so we
         # report the practical view: any payload fits as long as cover is
         # non-empty.
