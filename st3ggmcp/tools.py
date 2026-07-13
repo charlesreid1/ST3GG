@@ -1,10 +1,9 @@
-"""ST3GG tool implementations for the MCP server.
+"""
+ST3GG tool implementations for the MCP server.
 
-Ported from the retired Slack bot. Every tool takes a filesystem `path`
-(server-local) instead of a Slack `file_id`. Encoder tools take an
-`output_path` and write their result to disk; they no longer queue files for
-upload. All results are JSON-shaped dicts; the MCP server serializes them for
-the client.
+Every tool takes a filesystem `path` (server-local).
+Encoder tools take an `output_path` and write their result to disk.
+All results are JSON-shaped dicts; the MCP server serializes them for the client.
 """
 
 from __future__ import annotations
@@ -22,6 +21,7 @@ from PIL import Image
 import analysis_tools as at
 import injector
 import steg_core
+import text_core
 
 logger = logging.getLogger(__name__)
 
@@ -893,8 +893,14 @@ _TEXT_STEG_DETECTORS = (
     "detect_variation_selector_steg",
     "detect_combining_mark_steg",
     "detect_confusable_whitespace",
+    "detect_directional_override_steg",
+    "detect_hangul_filler_steg",
     "detect_capitalization_steg",
     "detect_emoji_steg",
+    "detect_math_bold_steg",
+    "detect_braille_steg",
+    "detect_emoji_substitution_steg",
+    "detect_skintone_steg",
     "decode_directional_override",
     "decode_hangul_filler",
     "decode_math_alphanumeric",
@@ -1013,8 +1019,177 @@ async def execute_list_techniques(**_kw) -> str:
         ),
         "encode_manual": "Hide a payload via LSB with an explicit channels/bits/strategy recipe.",
         "encode_metadata": "Hide a payload in a PNG text (tEXt/iTXt/zTXt) or private chunk.",
+        "text_encode": (
+            "Hide a payload in plain text via zero_width, homoglyph, whitespace, "
+            "invisible_ink, variation, combining, confusable, directional, hangul, "
+            "mathbold, braille, emoji, skintone, or capitalization. Round-trip-"
+            "compatible with the browser Text Lab (except capitalization, which is "
+            "Python-only). braille/emoji/skintone append the payload as its own "
+            "block after the cover — visibly perturbed, not invisible."
+        ),
+        "text_decode": "Recover a payload from a stego text produced by text_encode (or the browser).",
+        "text_capacity": "Pre-flight: how many payload bytes a given cover can carry under a text-steg method.",
     }
     return _truncate_json(catalog, max_chars=2000)
+
+
+# ---------------------------------------------------------------------------
+# Text-steg encoders (write UTF-8 text; take cover as inline text OR file path)
+# ---------------------------------------------------------------------------
+def _resolve_text_input(inline: str | None, path: str | None, label: str) -> tuple[str | None, str | None]:
+    """Return (text, err). Prefer inline; else read UTF-8 from path."""
+    if inline is not None:
+        if not isinstance(inline, str):
+            return None, f"{label}: must be a string"
+        return inline, None
+    if path is not None:
+        try:
+            p = Path(path)
+        except Exception as exc:
+            return None, f"{label}: invalid path: {exc}"
+        if not p.exists():
+            return None, f"{label}: file not found: {path}"
+        if not p.is_file():
+            return None, f"{label}: not a regular file: {path}"
+        if p.stat().st_size > MAX_FILE_SIZE:
+            return None, f"{label}: file too large ({p.stat().st_size} bytes)"
+        try:
+            return p.read_text(encoding="utf-8"), None
+        except Exception as exc:
+            return None, f"{label}: failed to read as UTF-8: {exc}"
+    return None, f"{label}: must supply either inline text or a file path"
+
+
+async def execute_text_encode(
+    method: str,
+    secret: str,
+    cover_text: str | None = None,
+    cover_path: str | None = None,
+    output_path: str | None = None,
+    **_kw,
+) -> str:
+    if method not in text_core.METHODS:
+        return (
+            f"stegg_text_encode error: unknown method '{method}'. "
+            f"Try one of: {', '.join(text_core.METHODS)}"
+        )
+    if not isinstance(secret, str):
+        return "stegg_text_encode error: 'secret' must be a string"
+
+    cover, err = _resolve_text_input(cover_text, cover_path, "cover")
+    if err:
+        return f"stegg_text_encode error: {err}"
+
+    def work():
+        try:
+            stego = text_core.encode(cover, secret, method)
+        except text_core.TextStegCapacityError as exc:
+            return {"__err__": str(exc)}
+        return {"stego": stego}
+
+    try:
+        result = await _run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_text_encode timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("text_encode failed")
+        return f"stegg_text_encode error: {exc}"
+
+    if isinstance(result, dict) and "__err__" in result:
+        return f"stegg_text_encode: {result['__err__']}"
+
+    stego = result["stego"]
+    summary: dict[str, Any] = {
+        "method": method,
+        "cover_chars": len(cover),
+        "stego_chars": len(stego),
+        "stego_bytes_utf8": len(stego.encode("utf-8")),
+        "payload_bytes": len(secret.encode("utf-8")),
+    }
+    if output_path:
+        try:
+            Path(output_path).write_text(stego, encoding="utf-8")
+        except Exception as exc:
+            return f"stegg_text_encode: failed to write {output_path}: {exc}"
+        summary["output_path"] = str(Path(output_path).resolve())
+        summary["text"] = (
+            f"hid {summary['payload_bytes']} bytes via {method}. wrote {output_path}."
+        )
+    else:
+        summary["stego"] = stego
+        summary["text"] = f"hid {summary['payload_bytes']} bytes via {method}."
+    return _truncate_json(summary)
+
+
+async def execute_text_decode(
+    method: str,
+    stego_text: str | None = None,
+    stego_path: str | None = None,
+    **_kw,
+) -> str:
+    if method not in text_core.METHODS:
+        return (
+            f"stegg_text_decode error: unknown method '{method}'. "
+            f"Try one of: {', '.join(text_core.METHODS)}"
+        )
+
+    stego, err = _resolve_text_input(stego_text, stego_path, "stego")
+    if err:
+        return f"stegg_text_decode error: {err}"
+
+    def work():
+        return text_core.decode(stego, method)
+
+    try:
+        recovered = await _run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_text_decode timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("text_decode failed")
+        return f"stegg_text_decode error: {exc}"
+
+    summary = {
+        "method": method,
+        "recovered": recovered,
+        "recovered_bytes": len(recovered.encode("utf-8")),
+        "text": (
+            f"recovered {len(recovered.encode('utf-8'))} bytes via {method}."
+            if recovered
+            else f"nothing recovered via {method}."
+        ),
+    }
+    return _truncate_json(summary)
+
+
+async def execute_text_capacity(
+    method: str,
+    cover_text: str | None = None,
+    cover_path: str | None = None,
+    **_kw,
+) -> str:
+    if method not in text_core.METHODS:
+        return (
+            f"stegg_text_capacity error: unknown method '{method}'. "
+            f"Try one of: {', '.join(text_core.METHODS)}"
+        )
+
+    cover, err = _resolve_text_input(cover_text, cover_path, "cover")
+    if err:
+        return f"stegg_text_capacity error: {err}"
+
+    def work():
+        return text_core.capacity(cover, method)
+
+    try:
+        report = await _run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_text_capacity timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("text_capacity failed")
+        return f"stegg_text_capacity error: {exc}"
+
+    report["cover_chars"] = len(cover)
+    return _truncate_json(report)
 
 
 # ---------------------------------------------------------------------------
@@ -1029,6 +1204,9 @@ TOOL_EXECUTORS = {
     "stegg_decode_manual": execute_decode_manual,
     "stegg_text_steg": execute_text_steg,
     "stegg_text_steg_message": execute_text_steg_message,
+    "stegg_text_encode": execute_text_encode,
+    "stegg_text_decode": execute_text_decode,
+    "stegg_text_capacity": execute_text_capacity,
     "stegg_carve": execute_carve,
     "stegg_encode_manual": execute_encode_manual,
     "stegg_encode_metadata": execute_encode_metadata,
@@ -1138,6 +1316,68 @@ TOOL_SCHEMAS: dict[str, dict] = {
             "type": "object",
             "properties": {"text": {"type": "string", "description": "The text to scan verbatim."}},
             "required": ["text"],
+        },
+    },
+    "stegg_text_encode": {
+        "description": (
+            "Hide a secret string inside a cover text using a text-steg technique. "
+            "Method must be one of: zero_width, homoglyph, whitespace, invisible_ink, "
+            "variation, combining, confusable, directional, hangul, mathbold, braille, "
+            "emoji, skintone, capitalization. "
+            "Supply the cover as either inline text (cover_text) or a file path (cover_path). "
+            "Returns the stego text inline, or writes it to output_path if given. "
+            "Round-trip-compatible with the browser Text Lab in index.html (except "
+            "capitalization, which is Python-only). braille, emoji, and skintone append "
+            "the payload as its own block after the cover (separated by '\\n\\n') — "
+            "the stego is visibly perturbed, not invisible."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
+                "secret": {"type": "string", "description": "The secret string to hide."},
+                "cover_text": {"type": "string", "description": "Cover text supplied inline."},
+                "cover_path": {"type": "string", "description": "Filesystem path to a UTF-8 cover file (alternative to cover_text)."},
+                "output_path": {"type": "string", "description": "Where to write the stego text. If omitted, the stego is returned in the result."},
+            },
+            "required": ["method", "secret"],
+        },
+    },
+    "stegg_text_decode": {
+        "description": (
+            "Recover a hidden secret from a stego text produced by stegg_text_encode "
+            "(or by the browser Text Lab). Method must be one of: zero_width, homoglyph, "
+            "whitespace, invisible_ink, variation, combining, confusable, directional, "
+            "hangul, mathbold, braille, emoji, skintone, capitalization. Supply the stego "
+            "as inline text (stego_text) or a file path (stego_path)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
+                "stego_text": {"type": "string", "description": "Stego text supplied inline."},
+                "stego_path": {"type": "string", "description": "Filesystem path to a UTF-8 stego file (alternative to stego_text)."},
+            },
+            "required": ["method"],
+        },
+    },
+    "stegg_text_capacity": {
+        "description": (
+            "Pre-flight: how many payload bytes will fit in this cover under this method. "
+            "Use before stegg_text_encode when the cover might be too small. Length-prefixed "
+            "methods (homoglyph, whitespace, variation, combining, confusable, hangul, "
+            "mathbold, capitalization) will raise TextStegCapacityError on undersized covers. "
+            "braille, emoji, and skintone append the payload as its own block after the cover "
+            "(like zero_width today), so payload_bytes_max is None for those."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
+                "cover_text": {"type": "string", "description": "Cover text supplied inline."},
+                "cover_path": {"type": "string", "description": "Filesystem path to a UTF-8 cover file (alternative to cover_text)."},
+            },
+            "required": ["method"],
         },
     },
     "stegg_carve": {

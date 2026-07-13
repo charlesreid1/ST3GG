@@ -617,6 +617,93 @@ def inject_leet(
     console.print(Panel(result, title="[green]Leetspeak[/green]", border_style="green"))
 
 
+# ============== TEXT STEG COMMANDS ==============
+
+import text_core
+
+text_app = typer.Typer(help="🔤 Text steganography: hide/reveal in plain text")
+app.add_typer(text_app, name="text")
+
+
+def _read_cover_or_stego(path_or_dash: str) -> str:
+    """Read UTF-8 text from a path, or from stdin if '-'."""
+    if path_or_dash == "-":
+        return sys.stdin.read()
+    return Path(path_or_dash).read_text(encoding="utf-8")
+
+
+@text_app.command("encode")
+def text_encode_cmd(
+    method: str = typer.Option(..., "--method", "-m", help=f"One of: {', '.join(text_core.METHODS)}"),
+    cover: str = typer.Option(..., "--cover", "-c", help="Cover text file path (or '-' for stdin)"),
+    secret: str = typer.Option(..., "--secret", "-s", help="Secret string to hide"),
+    output: Optional[Path] = typer.Option(None, "--out", "-o", help="Output path (stdout if omitted)"),
+):
+    """Hide a secret string in a cover text via a classic text-steg method."""
+    if method not in text_core.METHODS:
+        error(f"unknown method '{method}'. Try one of: {', '.join(text_core.METHODS)}")
+        raise typer.Exit(1)
+    try:
+        cover_text = _read_cover_or_stego(cover)
+    except Exception as e:
+        error(f"failed to read cover: {e}")
+        raise typer.Exit(1)
+    try:
+        stego = text_core.encode(cover_text, secret, method)
+    except text_core.TextStegCapacityError as e:
+        error(str(e))
+        raise typer.Exit(1)
+
+    if output is None:
+        sys.stdout.write(stego)
+    else:
+        output.write_text(stego, encoding="utf-8")
+        success(f"wrote {len(stego)} chars ({len(stego.encode('utf-8'))} bytes) to {output}")
+
+
+@text_app.command("decode")
+def text_decode_cmd(
+    method: str = typer.Option(..., "--method", "-m", help=f"One of: {', '.join(text_core.METHODS)}"),
+    stego: str = typer.Option(..., "--stego", "-i", help="Stego text file path (or '-' for stdin)"),
+):
+    """Recover a hidden secret from a stego text."""
+    if method not in text_core.METHODS:
+        error(f"unknown method '{method}'. Try one of: {', '.join(text_core.METHODS)}")
+        raise typer.Exit(1)
+    try:
+        stego_text = _read_cover_or_stego(stego)
+    except Exception as e:
+        error(f"failed to read stego: {e}")
+        raise typer.Exit(1)
+    recovered = text_core.decode(stego_text, method)
+    sys.stdout.write(recovered)
+    if recovered and not recovered.endswith("\n"):
+        sys.stdout.write("\n")
+
+
+@text_app.command("capacity")
+def text_capacity_cmd(
+    method: str = typer.Option(..., "--method", "-m", help=f"One of: {', '.join(text_core.METHODS)}"),
+    cover: str = typer.Option(..., "--cover", "-c", help="Cover text file path (or '-' for stdin)"),
+):
+    """Report how many payload bytes a cover can carry under a method."""
+    if method not in text_core.METHODS:
+        error(f"unknown method '{method}'. Try one of: {', '.join(text_core.METHODS)}")
+        raise typer.Exit(1)
+    try:
+        cover_text = _read_cover_or_stego(cover)
+    except Exception as e:
+        error(f"failed to read cover: {e}")
+        raise typer.Exit(1)
+    rep = text_core.capacity(cover_text, method)
+    table = Table(show_header=False, box=box.SIMPLE)
+    table.add_column("Field", style="cyan")
+    table.add_column("Value")
+    for k, v in rep.items():
+        table.add_row(k, str(v))
+    console.print(Panel(table, title=f"[cyan]capacity: {method}[/cyan]", border_style="cyan"))
+
+
 # ============== INFO COMMAND ==============
 
 @app.command()
