@@ -2,6 +2,10 @@
 
 MCP server exposing the ST3GG steganography toolset over HTTP.
 
+Covers three carrier families as equal peers — **image**, **text**, **emoji** — plus general steganography advice (persona answers general-craft questions from knowledge; a file is not required).
+
+**Transport-aware.** The persona treats "how is this getting delivered?" as a first-class question. Every transport has a *canonical form* it treats as the real message and normalizes everything below that line — Slack canonicalizes to the rendered post (kills EXIF, kills PNG text chunks, canonicalizes emoji to `:colon_form:` and murders emoji-attached tag sequences and variation selectors), terminal stdout canonicalizes to visible glyphs (kills zero-width unless you pipe through `pbcopy` / `xclip`), JPEG re-encode canonicalizes to a perceptual approximation (kills LSB). See `TRANSPORT_MATRIX.md` for the empirical scoreboard.
+
 ## Install
 
 ```bash
@@ -27,20 +31,30 @@ Point any MCP client (Claude Code, opencode) at `http://<host>:8765/mcp` as an H
 
 ## Tools
 
-Every tool takes a `path` (server-local filesystem path). Encoder tools take an `output_path` to write the encoded file to.
+Image tools take a `path` (server-local filesystem path). Text tools accept either inline text or a UTF-8 file path — no image required. Encoder tools take an optional `output_path`.
 
-- `stegg_read_metadata`
-- `stegg_triage`
-- `stegg_lsb_smart_scan`
-- `stegg_detect_trailing`
-- `stegg_read_png_chunks`
-- `stegg_decode_manual`
-- `stegg_text_steg`
-- `stegg_text_steg_message`
-- `stegg_carve`
-- `stegg_encode_manual`
-- `stegg_encode_metadata`
-- `stegg_list_techniques`
+Image detect / decode:
+- `stegg_read_metadata` — PNG text chunks + PIL info
+- `stegg_triage` — signals-expert sweep with severity + verdict
+- `stegg_lsb_smart_scan` — brute-force LSB extraction
+- `stegg_detect_trailing` — bytes past IEND / EOI
+- `stegg_read_png_chunks` — full PNG chunk dump
+- `stegg_decode_manual` — LSB decode with an explicit recipe
+- `stegg_carve` — try ZIP/GZip/TAR/PDF/SQLite/SVG/PCAP/JPEG/audio-LSB decoders
+
+Text / emoji detect / decode:
+- `stegg_text_steg` — full text-steg detector suite over a file
+- `stegg_text_steg_message` — same suite over an inline text string
+- `stegg_text_decode` — recover a payload with a named method
+- `stegg_text_capacity` — pre-flight how many bytes fit under a method
+
+Encode / hide:
+- `stegg_encode_manual` — LSB hide with channels + bits + strategy
+- `stegg_encode_metadata` — hide in a PNG text or private chunk
+- `stegg_text_encode` — hide in text via zero_width / homoglyph / whitespace / invisible_ink / variation / combining / confusable / directional / hangul / mathbold / braille / emoji / skintone / capitalization
+
+Meta:
+- `stegg_list_techniques` — catalog of what this server can do
 
 ## Resources
 

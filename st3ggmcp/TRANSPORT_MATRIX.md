@@ -7,6 +7,18 @@ Which steganography techniques survive which consumer messaging / file-transport
 - Users trying to smuggle a payload through a channel can pick a technique that arrives intact.
 - Defensive teams know what an adversary can still push through sanctioned tools.
 
+## The one principle behind every row
+
+Every transport has a **canonical form** it treats as "the real message." Anything you hid *at or above* the canonical form survives; anything you hid *below* it gets normalized, stripped, or re-encoded out of existence. The rows below are just instances of this one principle:
+
+- **Slack / Discord / iMessage bodies** canonicalize to the *rendered post*. On the way in, they colon-canonicalize emoji, strip image metadata, and re-serve image bytes from their own CDN. → Kills anything living in metadata, emoji-attached data (tag chars, VS on emoji), and often trailing bytes.
+- **Terminal stdout + manual mouse-copy** canonicalizes to the *visible glyph stream*. → Kills zero-width, VS, combining marks. `pbcopy` / `xclip` / `clip.exe` bypass the canonicalization by preserving the byte stream directly.
+- **JPEG re-encode / WhatsApp photo / Instagram** canonicalize to a *perceptual approximation*. → Kills LSB, high-nibble embed, direct pixel overwrite. May preserve DCT-robust hides and spread-spectrum watermarks.
+- **Email SMTP / raw HTTP / GitHub upload / Telegram-as-file** canonicalize to *the file bytes*. → Everything survives; this is the happy path.
+- **Aggressive Unicode normalizers** (some search boxes, some DBs, some sanitizers) canonicalize to *NFC/NFKC*. → Kills homoglyph (Cyrillic `а` normalizes to Latin `a`), some VS, combining marks.
+
+Read every cell as: "does this transport's canonical form sit above or below the layer this technique hides in?"
+
 ## Legend
 
 | Symbol | Meaning |
@@ -80,7 +92,11 @@ Confirmed cells first, unknown cells left for later.
 
 **[4] WhatsApp JPEG EXIF — STRIPPED.** WhatsApp is well documented as recoding and stripping metadata from photos (not files). Not independently tested here.
 
-**[5] Emoji tag sequences — STRIPPED (canonicalized).** Slack canonicalizes emoji in message text to their `:colon_syntax:` form on send. Any payload packed onto an emoji as trailing tag characters (U+E0020–E007F) — the "black flag with tags" trick — is stripped before the message reaches a bot. The client displays a normal emoji; the bot receives `:name:`. Reported by users testing round-trip fidelity.
+**[5] Emoji tag sequences — STRIPPED (canonicalized).** Slack round-trips emoji through their `:colon_syntax:` form. On the wire, an emoji is `:red_circle:`, not the Unicode codepoint. When the receiving client re-renders, it emits a fresh Unicode emoji with no trailing data. Any payload packed onto an emoji as trailing tag characters (U+E0020–E007F) — the "black flag with tags" trick — is stripped, because it never lived in the canonical form Slack preserves. Emoji variation selectors (U+FE00–FE0F, U+E0100–E01EF) attached to emoji ride the same doomed path. Emoji-adjacent metadata steg is DOA on Slack. Text-body zero-width chars may fare better because they don't ride on an emoji — test first. Reported by users testing round-trip fidelity; consistent with Slack's documented "we canonicalize what we render" pipeline.
+
+### Terminal stdout: canonical form is the visible glyph
+
+Terminal windows render bytes to glyphs; the user's mouse selection copies the glyphs, not the bytes. Zero-width chars, VS, and combining marks may not survive that path — the terminal filters them from the copy buffer. Clipboard utilities (`pbcopy` on macOS, `xclip -sel clip` / `xsel --clipboard --input` on Linux, `clip.exe` on Windows) copy the byte stream directly and preserve everything. If a hide is dying between "prints in my terminal" and "pastes into my chat", suspect the terminal's glyph canonicalization and pipe through `pbcopy` instead. Same principle as Slack, different canonical layer.
 
 ## Test methodology (for adding rows/cells)
 
