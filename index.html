@@ -8322,7 +8322,13 @@
                     }
                     if (bits.length >= 16) {
                         const len = parseInt(bits.slice(0,16), 2);
-                        if (len > 0) { let m=''; for(let i=16;i<16+len*8&&i+8<=bits.length;i+=8) m+=String.fromCharCode(parseInt(bits.slice(i,i+8),2)); result=m; }
+                        if (len > 0) {
+                            const bytes = [];
+                            for (let i = 16; i + 8 <= 16 + len * 8 && i + 8 <= bits.length; i += 8) {
+                                bytes.push(parseInt(bits.slice(i, i + 8), 2));
+                            }
+                            result = new TextDecoder().decode(new Uint8Array(bytes));
+                        }
                     }
 
                 } else if (method === 'braille') {
