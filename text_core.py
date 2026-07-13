@@ -1,8 +1,8 @@
 """Text steganography encode/decode core (ST3GG-faithful).
 
-Ports the classic + advanced Unicode text-in-text techniques from
-`index.html` so that Python callers can encode and decode the same stego
-texts the browser produces.
+Ports the classic + advanced + extended Unicode text-in-text techniques
+from `index.html` so that Python callers can encode and decode the same
+stego texts the browser produces.
 
 Classic techniques:
   - zero_width:    ZWJ start + ZWSP(0)/ZWNJ(1) payload bits + ZWJ end,
@@ -29,16 +29,40 @@ Advanced Unicode techniques:
   - hangul:        16-bit length prefix + payload bits; each ASCII space
                    -> HANGUL FILLER (U+3164)=1 or space=0.
 
-Divergence-from-JS notes: the JS in index.html is the intended reference
-implementation, but two of its decoders are buggy as written. We treat JS
-as an aspiration rather than gospel — Python emits byte-for-byte compatible
-STEGO output (so the browser's encoder and any correct decoder round-trip
-against Python), but Python's decoders fix the JS bugs on the read side:
+Extended Unicode techniques:
+  - mathbold:      16-bit length prefix + payload bits; ASCII letter ->
+                   math-bold codepoint (U+1D400..U+1D433) = 1, plain
+                   letter = 0. Carrier positions are ASCII letters in
+                   cover order.
+  - braille:       No length prefix. Each byte of `secret.encode('utf-8')`
+                   -> `chr(0x2800 + byte)`. Payload appended after cover
+                   with `"\\n\\n"` separator.
+  - emoji:         16-bit length prefix + payload bits; bit 1 -> 🔴,
+                   bit 0 -> 🔵. Payload appended after cover with
+                   `"\\n\\n"` separator.
+  - skintone:      No length prefix. Each byte -> 4 skin-tone digits
+                   (2 bits each). Each digit is `👍 + tone modifier`,
+                   digits joined with `" "`. Payload appended after cover
+                   with `"\\n\\n"` separator.
+  - capitalization:16-bit length prefix + payload bits; word-initial
+                   ASCII letter uppercase = 1, lowercase = 0. Order is
+                   `cover.split(" ")` (Python-only; no JS reference).
 
-1. All JS decoders reconstruct payload bytes via
+Divergence-from-JS notes: the JS in index.html is the intended reference
+implementation, but several of its decoders are buggy as written. We treat
+JS as an aspiration rather than gospel — Python emits byte-for-byte
+compatible STEGO output (so the browser's encoder and any correct decoder
+round-trip against Python), but Python's decoders fix the JS bugs on the
+read side:
+
+1. Most JS decoders reconstruct payload bytes via
    `String.fromCharCode(parseInt(bits, 2))`, which is Latin-1 per byte —
    the encode side wrote UTF-8. So multi-byte secrets come back as mojibake
-   in the browser. Python decodes as UTF-8 (`errors='replace'`).
+   in the browser. Python decodes as UTF-8 (`errors='replace'`). This
+   affects: variation, combining, confusable, directional, hangul,
+   mathbold, emoji. The braille and skintone JS decoders use
+   `new TextDecoder().decode(new Uint8Array(...))` so those are
+   UTF-8-correct on the JS side too.
 
 2. The `combining` JS decoder walks chars emitting '0' on every letter and
    '1' on every CGJ, without accounting for the fact that a 1-bit carrier
@@ -48,6 +72,9 @@ against Python), but Python's decoders fix the JS bugs on the read side:
    look-ahead pattern from `decode_variation` instead — see the comment on
    that function for the exact scheme. Fixing the JS side is out of scope
    for this port.
+
+3. `capitalization` has no JS reference — it's Python-only, standardized
+   here per the shape in `examples/generate_examples.py`.
 """
 
 from __future__ import annotations
@@ -90,9 +117,25 @@ CONFUSABLE_SPACE_TABLE: Dict[str, str] = {
 }
 CONFUSABLE_REVERSE: Dict[str, str] = {v: k for k, v in CONFUSABLE_SPACE_TABLE.items()}
 
+# Extended technique constants (ported from index.html:8154-8203).
+MATH_BOLD_A_UPPER = 0x1D400   # 𝐀
+MATH_BOLD_A_LOWER = 0x1D41A   # 𝐚
+MATH_BOLD_UPPER_END = 0x1D419  # 𝐙
+MATH_BOLD_LOWER_END = 0x1D433  # 𝐳
+
+BRAILLE_BASE = 0x2800          # ⠀ empty pattern; +byte gives dot pattern
+
+EMOJI_ZERO = '\U0001F535'      # 🔵
+EMOJI_ONE  = '\U0001F534'      # 🔴
+
+SKINTONE_BASE = '\U0001F44D'   # 👍 thumbs up
+SKINTONE_TABLE = ('\U0001F3FB', '\U0001F3FC', '\U0001F3FE', '\U0001F3FF')  # 00,01,10,11
+SKINTONE_REVERSE = {t: i for i, t in enumerate(SKINTONE_TABLE)}
+
 METHODS: Tuple[str, ...] = (
     'zero_width', 'homoglyph', 'whitespace', 'invisible_ink',
     'variation', 'combining', 'confusable', 'directional', 'hangul',
+    'mathbold', 'braille', 'emoji', 'skintone', 'capitalization',
 )
 
 
@@ -499,6 +542,174 @@ def decode_hangul(stego: str) -> str:
     return _bits_to_bytes(data_bits, length).decode('utf-8', errors='replace')
 
 
+# --- math bold ---------------------------------------------------------------
+
+def _mathbold_carriers(cover: str) -> int:
+    return sum(1 for ch in cover if ch.isascii() and ch.isalpha())
+
+
+def encode_mathbold(cover: str, secret: str) -> str:
+    payload = secret.encode('utf-8')
+    bits = format(len(payload), '016b') + _bits_of(payload)
+    have = _mathbold_carriers(cover)
+    need = len(bits)
+    if need > have:
+        raise TextStegCapacityError(
+            f"mathbold: cover too small: need {need} carrier bits, have {have} "
+            f"({need - have} short; payload = {len(payload)} bytes)"
+        )
+    out = []
+    bit_idx = 0
+    for ch in cover:
+        if bit_idx < len(bits) and ch.isascii() and ch.isalpha():
+            if bits[bit_idx] == '1':
+                code = ord(ch)
+                if 65 <= code <= 90:
+                    out.append(chr(MATH_BOLD_A_UPPER + code - 65))
+                elif 97 <= code <= 122:
+                    out.append(chr(MATH_BOLD_A_LOWER + code - 97))
+                else:
+                    out.append(ch)
+            else:
+                out.append(ch)
+            bit_idx += 1
+        else:
+            out.append(ch)
+    return ''.join(out)
+
+
+def decode_mathbold(stego: str) -> str:
+    bits = []
+    for ch in stego:
+        cp = ord(ch)
+        if (MATH_BOLD_A_UPPER <= cp <= MATH_BOLD_UPPER_END
+                or MATH_BOLD_A_LOWER <= cp <= MATH_BOLD_LOWER_END):
+            bits.append('1')
+        elif (65 <= cp <= 90) or (97 <= cp <= 122):
+            bits.append('0')
+    if len(bits) < 16:
+        return ''
+    length = int(''.join(bits[:16]), 2)
+    if length <= 0 or length > 10000:
+        return ''
+    data_bits = ''.join(bits[16:16 + 8 * length])
+    return _bits_to_bytes(data_bits, length).decode('utf-8', errors='replace')
+
+
+# --- braille -----------------------------------------------------------------
+
+def encode_braille(cover: str, secret: str) -> str:
+    payload = secret.encode('utf-8')
+    braille = ''.join(chr(BRAILLE_BASE + b) for b in payload)
+    return cover + '\n\n' + braille
+
+
+def decode_braille(stego: str) -> str:
+    bytes_out = bytearray()
+    for ch in stego:
+        cp = ord(ch)
+        if BRAILLE_BASE <= cp <= BRAILLE_BASE + 0xFF:
+            bytes_out.append(cp - BRAILLE_BASE)
+    return bytes(bytes_out).decode('utf-8', errors='replace')
+
+
+# --- emoji substitution -------------------------------------------------------
+
+def encode_emoji(cover: str, secret: str) -> str:
+    payload = secret.encode('utf-8')
+    bits = format(len(payload), '016b') + _bits_of(payload)
+    emoji = ''.join(EMOJI_ONE if b == '1' else EMOJI_ZERO for b in bits)
+    return cover + '\n\n' + emoji
+
+
+def decode_emoji(stego: str) -> str:
+    bits = []
+    for ch in stego:
+        if ch == EMOJI_ONE:
+            bits.append('1')
+        elif ch == EMOJI_ZERO:
+            bits.append('0')
+    if len(bits) < 16:
+        return ''
+    length = int(''.join(bits[:16]), 2)
+    if length <= 0 or length > 10000:
+        return ''
+    data_bits = ''.join(bits[16:16 + 8 * length])
+    return _bits_to_bytes(data_bits, length).decode('utf-8', errors='replace')
+
+
+# --- skin tone ---------------------------------------------------------------
+
+def encode_skintone(cover: str, secret: str) -> str:
+    payload = secret.encode('utf-8')
+    digits = []
+    for b in payload:
+        digits.append((b >> 6) & 3)
+        digits.append((b >> 4) & 3)
+        digits.append((b >> 2) & 3)
+        digits.append(b & 3)
+    encoded = ' '.join(SKINTONE_BASE + SKINTONE_TABLE[d] for d in digits)
+    return cover + '\n\n' + encoded
+
+
+def decode_skintone(stego: str) -> str:
+    pairs = [SKINTONE_REVERSE[ch] for ch in stego if ch in SKINTONE_REVERSE]
+    if len(pairs) < 4:
+        return ''
+    out = bytearray()
+    for i in range(0, len(pairs) - 3, 4):
+        out.append((pairs[i] << 6) | (pairs[i + 1] << 4) | (pairs[i + 2] << 2) | pairs[i + 3])
+    return bytes(out).decode('utf-8', errors='replace')
+
+
+# --- capitalization ----------------------------------------------------------
+
+def _capitalization_carriers(cover: str) -> int:
+    return sum(1 for w in cover.split(' ') if w and w[0].isascii() and w[0].isalpha())
+
+
+def encode_capitalization(cover: str, secret: str) -> str:
+    payload = secret.encode('utf-8')
+    bits = format(len(payload), '016b') + _bits_of(payload)
+    have = _capitalization_carriers(cover)
+    need = len(bits)
+    if need > have:
+        raise TextStegCapacityError(
+            f"capitalization: cover too small: need {need} carrier bits, have {have} "
+            f"({need - have} short; payload = {len(payload)} bytes; 1 bit per word-initial ASCII letter)"
+        )
+    words = cover.split(' ')
+    bit_idx = 0
+    for i, w in enumerate(words):
+        if not w:
+            continue
+        first = w[0]
+        if bit_idx < len(bits) and first.isascii() and first.isalpha():
+            if bits[bit_idx] == '1':
+                words[i] = first.upper() + w[1:]
+            else:
+                words[i] = first.lower() + w[1:]
+            bit_idx += 1
+    return ' '.join(words)
+
+
+def decode_capitalization(stego: str) -> str:
+    bits = []
+    for w in stego.split(' '):
+        if not w:
+            continue
+        first = w[0]
+        if first.isascii() and first.isalpha():
+            bits.append('1' if first.isupper() else '0')
+    if len(bits) < 16:
+        return ''
+    length = int(''.join(bits[:16]), 2)
+    if length <= 0 or length > 10000:
+        return ''
+    data_bits = ''.join(bits[16:16 + 8 * length])
+    return _bits_to_bytes(data_bits, length).decode('utf-8', errors='replace')
+
+
 # --- capacity ----------------------------------------------------------------
 
 def capacity(cover: str, method: str) -> dict:
@@ -610,6 +821,61 @@ def capacity(cover: str, method: str) -> dict:
                 "HANGUL FILLER = 1, space = 0."
             ),
         }
+    if method == 'mathbold':
+        bits = _mathbold_carriers(cover)
+        return {
+            'method': method,
+            'carrier_bits': bits,
+            'payload_bytes_max': max(0, (bits - 16) // 8),
+            'notes': (
+                "16-bit length prefix + 1 bit per ASCII letter carrier "
+                "(math-bold codepoint = 1, plain letter = 0)."
+            ),
+        }
+    if method == 'braille':
+        return {
+            'method': method,
+            'carrier_bits': None,
+            'payload_bytes_max': None,
+            'notes': (
+                "Payload appended after cover as its own block, separated by "
+                "'\\n\\n'. Each payload byte maps to a braille pattern in "
+                "U+2800..U+28FF. Cover only needs to be non-empty."
+            ),
+        }
+    if method == 'emoji':
+        return {
+            'method': method,
+            'carrier_bits': None,
+            'payload_bytes_max': None,
+            'notes': (
+                "Payload appended after cover as its own block, separated by "
+                "'\\n\\n'. 16-bit length prefix + 1 bit per emoji "
+                "(🔴 = 1, 🔵 = 0). Cover only needs to be non-empty."
+            ),
+        }
+    if method == 'skintone':
+        return {
+            'method': method,
+            'carrier_bits': None,
+            'payload_bytes_max': None,
+            'notes': (
+                "Payload appended after cover as its own block, separated by "
+                "'\\n\\n'. Each byte -> 4 skin-tone modifiers (2 bits each), "
+                "joined with spaces. Cover only needs to be non-empty."
+            ),
+        }
+    if method == 'capitalization':
+        bits = _capitalization_carriers(cover)
+        return {
+            'method': method,
+            'carrier_bits': bits,
+            'payload_bytes_max': max(0, (bits - 16) // 8),
+            'notes': (
+                "16-bit length prefix + 1 bit per word-initial ASCII letter "
+                "(uppercase = 1, lowercase = 0)."
+            ),
+        }
     raise ValueError(f"unknown method '{method}'. Try one of: {', '.join(METHODS)}")
 
 
@@ -625,6 +891,11 @@ _ENCODERS = {
     'confusable':    encode_confusable,
     'directional':   encode_directional,
     'hangul':        encode_hangul,
+    'mathbold':       encode_mathbold,
+    'braille':        encode_braille,
+    'emoji':          encode_emoji,
+    'skintone':       encode_skintone,
+    'capitalization': encode_capitalization,
 }
 
 _DECODERS = {
@@ -637,6 +908,11 @@ _DECODERS = {
     'confusable':    decode_confusable,
     'directional':   decode_directional,
     'hangul':        decode_hangul,
+    'mathbold':       decode_mathbold,
+    'braille':        decode_braille,
+    'emoji':          decode_emoji,
+    'skintone':       decode_skintone,
+    'capitalization': decode_capitalization,
 }
 
 

@@ -40,6 +40,18 @@ COVERS = {
     "confusable":    (PREAMBLE + " ") * 3 + PREAMBLE,
     "directional":   PREAMBLE,
     "hangul":        (PREAMBLE + " ") * 5 + PREAMBLE,
+    # Extended techniques (SECRET = 21 bytes; framing = 184 bits where a
+    # length prefix applies):
+    #   mathbold       needs >=184 ASCII letter carriers; PREAMBLE has ~250 -> 1x is fine but 2x for headroom
+    #   braille        payload is its own block; cover only needs to be non-empty
+    #   emoji          payload is its own block; cover only needs to be non-empty
+    #   skintone       payload is its own block; cover only needs to be non-empty
+    #   capitalization needs >=184 word-initial ASCII letter carriers; PREAMBLE has ~52 -> 4x
+    "mathbold":       PREAMBLE + " " + PREAMBLE,
+    "braille":        PREAMBLE,
+    "emoji":          PREAMBLE,
+    "skintone":       PREAMBLE,
+    "capitalization": (PREAMBLE + " ") * 4,
 }
 
 SECRET = "flag{4m3r1c4n_sp1r1t}"
@@ -103,6 +115,18 @@ def test_directional_empty_cover_error():
     with pytest.raises(text_core.TextStegCapacityError) as exc:
         text_core.encode("", SECRET, "directional")
     assert "empty" in str(exc.value)
+
+
+def test_mathbold_capacity_error():
+    with pytest.raises(text_core.TextStegCapacityError) as exc:
+        text_core.encode("abc", SECRET, "mathbold")
+    assert "cover too small" in str(exc.value)
+
+
+def test_capitalization_capacity_error():
+    with pytest.raises(text_core.TextStegCapacityError) as exc:
+        text_core.encode("a b c d", SECRET, "capitalization")
+    assert "cover too small" in str(exc.value)
 
 
 def test_capacity_reports_bytes_max():
@@ -172,6 +196,78 @@ def test_hangul_detector_composes():
     stego = text_core.encode(COVERS["hangul"], SECRET, "hangul")
     r = at.detect_hangul_filler_steg(stego.encode("utf-8"))
     assert r["found"] is True
+
+
+def test_mathbold_detector_composes():
+    stego = text_core.encode(COVERS["mathbold"], SECRET, "mathbold")
+    r = at.detect_math_bold_steg(stego.encode("utf-8"))
+    assert r["found"] is True
+
+
+def test_braille_detector_composes():
+    stego = text_core.encode(COVERS["braille"], SECRET, "braille")
+    r = at.detect_braille_steg(stego.encode("utf-8"))
+    assert r["found"] is True
+
+
+def test_emoji_substitution_detector_composes():
+    stego = text_core.encode(COVERS["emoji"], SECRET, "emoji")
+    r = at.detect_emoji_substitution_steg(stego.encode("utf-8"))
+    assert r["found"] is True
+
+
+def test_skintone_detector_composes():
+    stego = text_core.encode(COVERS["skintone"], SECRET, "skintone")
+    r = at.detect_skintone_steg(stego.encode("utf-8"))
+    assert r["found"] is True
+
+
+def test_capitalization_detector_composes():
+    stego = text_core.encode(COVERS["capitalization"], SECRET, "capitalization")
+    r = at.detect_capitalization_steg(stego.encode("utf-8"))
+    assert r["found"] is True
+
+
+# --- reconciliation: analysis_tools decoders wrap text_core ------------------
+
+def test_reconcile_decode_braille():
+    stego = text_core.encode(COVERS["braille"], SECRET, "braille")
+    wrapper = at.decode_braille(stego.encode("utf-8"))
+    core = text_core.decode(stego, "braille")
+    assert wrapper["found"] is True
+    assert wrapper["message"] == core
+
+
+def test_reconcile_decode_directional_override():
+    stego = text_core.encode(COVERS["directional"], SECRET, "directional")
+    wrapper = at.decode_directional_override(stego.encode("utf-8"))
+    core = text_core.decode(stego, "directional")
+    assert wrapper["found"] is True
+    assert wrapper["message"] == core
+
+
+def test_reconcile_decode_hangul_filler():
+    stego = text_core.encode(COVERS["hangul"], SECRET, "hangul")
+    wrapper = at.decode_hangul_filler(stego.encode("utf-8"))
+    core = text_core.decode(stego, "hangul")
+    assert wrapper["found"] is True
+    assert wrapper["message"] == core
+
+
+def test_reconcile_decode_math_alphanumeric():
+    stego = text_core.encode(COVERS["mathbold"], SECRET, "mathbold")
+    wrapper = at.decode_math_alphanumeric(stego.encode("utf-8"))
+    core = text_core.decode(stego, "mathbold")
+    assert wrapper["found"] is True
+    assert wrapper["message"] == core
+
+
+def test_reconcile_decode_emoji_skin_tone():
+    stego = text_core.encode(COVERS["skintone"], SECRET, "skintone")
+    wrapper = at.decode_emoji_skin_tone(stego.encode("utf-8"))
+    core = text_core.decode(stego, "skintone")
+    assert wrapper["found"] is True
+    assert wrapper["message"] == core
 
 
 # --- corruption tolerance ----------------------------------------------------
@@ -245,6 +341,48 @@ def test_hangul_stripped_chars_does_not_crash():
     assert isinstance(text_core.decode(mangled, "hangul"), str)
 
 
+def test_mathbold_stripped_chars_does_not_crash():
+    stego = text_core.encode(COVERS["mathbold"], SECRET, "mathbold")
+    # Strip roughly half of the math-bold codepoints.
+    mangled = "".join(
+        ch for i, ch in enumerate(stego)
+        if not (0x1D400 <= ord(ch) <= 0x1D433) or i % 2 == 0
+    )
+    assert isinstance(text_core.decode(mangled, "mathbold"), str)
+
+
+def test_braille_stripped_chars_does_not_crash():
+    stego = text_core.encode(COVERS["braille"], SECRET, "braille")
+    mangled = "".join(
+        ch for i, ch in enumerate(stego)
+        if not (0x2800 <= ord(ch) <= 0x28FF) or i % 2 == 0
+    )
+    assert isinstance(text_core.decode(mangled, "braille"), str)
+
+
+def test_emoji_stripped_chars_does_not_crash():
+    stego = text_core.encode(COVERS["emoji"], SECRET, "emoji")
+    mangled = "".join(
+        ch for i, ch in enumerate(stego)
+        if ch not in (text_core.EMOJI_ONE, text_core.EMOJI_ZERO) or i % 2 == 0
+    )
+    assert isinstance(text_core.decode(mangled, "emoji"), str)
+
+
+def test_skintone_stripped_chars_does_not_crash():
+    stego = text_core.encode(COVERS["skintone"], SECRET, "skintone")
+    mangled = "".join(
+        ch for i, ch in enumerate(stego)
+        if ch not in text_core.SKINTONE_REVERSE or i % 2 == 0
+    )
+    assert isinstance(text_core.decode(mangled, "skintone"), str)
+
+
+def test_capitalization_no_carriers_returns_empty():
+    # No word-initial ASCII letters -> nothing to decode.
+    assert text_core.decode("123 456 789", "capitalization") == ""
+
+
 # --- generic dispatcher ------------------------------------------------------
 
 def test_encode_unknown_method_raises():
@@ -257,10 +395,11 @@ def test_decode_unknown_method_raises():
         text_core.decode(PREAMBLE, "bogus")
 
 
-def test_methods_tuple_is_the_nine():
+def test_methods_tuple_is_the_fourteen():
     assert set(text_core.METHODS) == {
         "zero_width", "homoglyph", "whitespace", "invisible_ink",
         "variation", "combining", "confusable", "directional", "hangul",
+        "mathbold", "braille", "emoji", "skintone", "capitalization",
     }
 
 
@@ -376,3 +515,100 @@ def test_invisible_ink_fixture_from_browser():
 
     assert text_core.decode(fixture, "invisible_ink") == secret
     assert text_core.encode(cover, secret, "invisible_ink") == fixture
+
+
+def test_mathbold_fixture_from_browser():
+    _skip_if_missing("mathbold_cover.txt", "mathbold_stego.txt")
+    cover = (FIXTURES / "mathbold_cover.txt").read_text(encoding="utf-8")
+    secret = "flag{b0ld_1s_1_pl41n_1s_0}"
+    fixture = (FIXTURES / "mathbold_stego.txt").read_text(encoding="utf-8").rstrip("\n")
+    assert text_core.decode(fixture, "mathbold") == secret
+    assert text_core.encode(cover, secret, "mathbold") == fixture
+
+
+def test_braille_fixture_from_browser():
+    _skip_if_missing("braille_cover.txt", "braille_stego.txt")
+    cover = (FIXTURES / "braille_cover.txt").read_text(encoding="utf-8")
+    secret = "flag{brl_p47t3rn}"
+    fixture = (FIXTURES / "braille_stego.txt").read_text(encoding="utf-8").rstrip("\n")
+    assert text_core.decode(fixture, "braille") == secret
+    assert text_core.encode(cover, secret, "braille") == fixture
+
+
+def test_emoji_fixture_from_browser():
+    _skip_if_missing("emoji_cover.txt", "emoji_stego.txt")
+    cover = (FIXTURES / "emoji_cover.txt").read_text(encoding="utf-8")
+    secret = "flag{r3d_1_blu3_0}"
+    fixture = (FIXTURES / "emoji_stego.txt").read_text(encoding="utf-8").rstrip("\n")
+    assert text_core.decode(fixture, "emoji") == secret
+    assert text_core.encode(cover, secret, "emoji") == fixture
+
+
+def test_skintone_fixture_from_browser():
+    _skip_if_missing("skintone_cover.txt", "skintone_stego.txt")
+    cover = (FIXTURES / "skintone_cover.txt").read_text(encoding="utf-8")
+    secret = "flag{4_t0n35_2_b1t5_34ch}"
+    fixture = (FIXTURES / "skintone_stego.txt").read_text(encoding="utf-8").rstrip("\n")
+    assert text_core.decode(fixture, "skintone") == secret
+    assert text_core.encode(cover, secret, "skintone") == fixture
+
+
+def test_capitalization_fixture_python_source_of_truth():
+    # NB: capitalization has no JS reference in index.html Text Lab, so this
+    # fixture is Python-produced (round-trip only; not a cross-language check).
+    _skip_if_missing("capitalization_cover.txt", "capitalization_stego.txt")
+    cover = (FIXTURES / "capitalization_cover.txt").read_text(encoding="utf-8")
+    secret = "flag{c4p1t4l1z4t10n_15_1}"
+    fixture = (FIXTURES / "capitalization_stego.txt").read_text(encoding="utf-8").rstrip("\n")
+    assert text_core.decode(fixture, "capitalization") == secret
+    assert text_core.encode(cover, secret, "capitalization") == fixture
+
+
+# --- MCP end-to-end smoke ----------------------------------------------------
+
+@pytest.mark.parametrize("method", [
+    "mathbold", "braille", "emoji", "skintone", "capitalization",
+])
+def test_mcp_round_trip(method):
+    """encode/decode/capacity land through the MCP dispatcher for each new method."""
+    import asyncio, json
+    from st3ggmcp.tools import execute_text_encode, execute_text_decode, execute_text_capacity
+
+    cover = COVERS[method]
+
+    async def run():
+        enc = json.loads(await execute_text_encode(method=method, secret=SECRET, cover_text=cover))
+        assert "stego" in enc, enc
+        dec = json.loads(await execute_text_decode(method=method, stego_text=enc["stego"]))
+        assert dec["recovered"] == SECRET
+        cap = json.loads(await execute_text_capacity(method=method, cover_text=cover))
+        assert cap["method"] == method
+        assert "carrier_bits" in cap and "payload_bytes_max" in cap
+
+    asyncio.run(run())
+
+
+def test_mcp_text_steg_fires_new_detectors():
+    """After encoding via each new technique, the MCP fan-out should surface a hit
+    from the framing-aware detector we added for it."""
+    import asyncio, json
+    from st3ggmcp.tools import execute_text_steg_message
+
+    expectations = [
+        ("mathbold",       "detect_math_bold_steg"),
+        ("braille",        "detect_braille_steg"),
+        ("emoji",          "detect_emoji_substitution_steg"),
+        ("skintone",       "detect_skintone_steg"),
+        ("capitalization", "detect_capitalization_steg"),
+    ]
+
+    async def run():
+        for method, detector in expectations:
+            stego = text_core.encode(COVERS[method], SECRET, method)
+            report = json.loads(await execute_text_steg_message(text=stego))
+            hit_detectors = {h["detector"] for h in report["hits"]}
+            assert detector in hit_detectors, (
+                f"{method}: expected {detector} in hits, got {hit_detectors}"
+            )
+
+    asyncio.run(run())

@@ -43,6 +43,10 @@ EXPECTED_TOOLS = {
     "decode_hangul_filler",
     "decode_math_alphanumeric",
     "decode_emoji_skin_tone",
+    "detect_math_bold_steg",
+    "detect_braille_steg",
+    "detect_emoji_substitution_steg",
+    "detect_skintone_steg",
 }
 
 

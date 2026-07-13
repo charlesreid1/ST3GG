@@ -37,6 +37,8 @@ try:
 except ImportError:
     HAS_PIL = False
 
+import text_core
+
 
 # ============== CORE INFRASTRUCTURE ==============
 
@@ -2165,6 +2167,67 @@ def detect_capitalization_steg(data: bytes) -> Dict[str, Any]:
     return results
 
 
+def detect_math_bold_steg(data: bytes) -> Dict[str, Any]:
+    """Detect math-bold substitution steganography (U+1D400..U+1D433)."""
+    results = {'found': False, 'count': 0}
+    try:
+        text = data.decode('utf-8', errors='ignore')
+    except Exception:
+        return results
+    for ch in text:
+        cp = ord(ch)
+        if 0x1D400 <= cp <= 0x1D419 or 0x1D41A <= cp <= 0x1D433:
+            results['count'] += 1
+    if results['count'] > 3:
+        results['found'] = True
+    return results
+
+
+def detect_braille_steg(data: bytes) -> Dict[str, Any]:
+    """Detect braille-pattern steganography (U+2800..U+28FF)."""
+    results = {'found': False, 'count': 0}
+    try:
+        text = data.decode('utf-8', errors='ignore')
+    except Exception:
+        return results
+    for ch in text:
+        cp = ord(ch)
+        if 0x2800 <= cp <= 0x28FF:
+            results['count'] += 1
+    if results['count'] > 3:
+        results['found'] = True
+    return results
+
+
+def detect_emoji_substitution_steg(data: bytes) -> Dict[str, Any]:
+    """Detect framing-aware emoji substitution steg (🔴 = 1, 🔵 = 0)."""
+    results = {'found': False, 'red_count': 0, 'blue_count': 0}
+    try:
+        text = data.decode('utf-8', errors='ignore')
+    except Exception:
+        return results
+    results['red_count'] = text.count('\U0001F534')
+    results['blue_count'] = text.count('\U0001F535')
+    if results['red_count'] + results['blue_count'] > 3:
+        results['found'] = True
+    return results
+
+
+def detect_skintone_steg(data: bytes) -> Dict[str, Any]:
+    """Detect skin-tone-modifier steganography (4 tones = 2 bits each)."""
+    results = {'found': False, 'count': 0}
+    try:
+        text = data.decode('utf-8', errors='ignore')
+    except Exception:
+        return results
+    for ch in text:
+        if ch in ('\U0001F3FB', '\U0001F3FC', '\U0001F3FE', '\U0001F3FF'):
+            results['count'] += 1
+    if results['count'] >= 4:
+        results['found'] = True
+    return results
+
+
 # ============== AUDIO STEGANOGRAPHY ==============
 
 def audio_lsb_decode(data: bytes) -> Dict[str, Any]:
@@ -2595,131 +2658,94 @@ def generic_image_lsb_decode(data: bytes) -> Dict[str, Any]:
 
 
 # ============== TEXT TECHNIQUE DECODERS ==============
+#
+# These are analysis-shaped wrappers around `text_core.decode_*`. `text_core`
+# owns the bit-level decode logic (single source of truth); the wrappers
+# re-wrap the recovered string as an `AnalysisResult`-shaped dict so the
+# analysis framework and MCP `execute_text_steg` fan-out consume a uniform
+# `{found, method, length, message, findings, ...}` shape.
 
 def decode_braille(data: bytes) -> Dict[str, Any]:
     """Decode Braille pattern steganography (U+2800 block)."""
     try:
         text = data.decode('utf-8')
-        braille = [c for c in text if 0x2800 <= ord(c) <= 0x28FF]
-        if len(braille) < 4:
-            return {'found': False}
-        decoded = bytes(ord(c) - 0x2800 for c in braille).decode('utf-8', errors='replace')
-        return {'found': True, 'method': 'braille', 'length': len(braille),
-                'message': decoded[:200],
-                'findings': [f'Braille ({len(braille)} chars): {decoded[:80]}']}
     except Exception as e:
         return {'error': str(e), 'found': False}
+    braille_count = sum(1 for c in text if 0x2800 <= ord(c) <= 0x28FF)
+    if braille_count < 4:
+        return {'found': False}
+    msg = text_core.decode_braille(text)
+    if not msg:
+        return {'found': False}
+    return {'found': True, 'method': 'braille', 'length': braille_count,
+            'message': msg[:200],
+            'findings': [f'Braille ({braille_count} chars): {msg[:80]}']}
 
 
 def decode_directional_override(data: bytes) -> Dict[str, Any]:
     """Decode directional override steganography (RLO=1, LRO=0)."""
     try:
         text = data.decode('utf-8')
-        bits = []
-        for ch in text:
-            if ch == '\u202E': bits.append('1')
-            elif ch == '\u202D': bits.append('0')
-        if len(bits) < 16:
-            return {'found': False}
-        length = int(''.join(bits[:16]), 2)
-        if length <= 0 or length > (len(bits) - 16) // 8:
-            return {'found': False}
-        msg = bytearray()
-        for i in range(16, 16 + length * 8, 8):
-            if i + 8 <= len(bits):
-                msg.append(int(''.join(bits[i:i+8]), 2))
-        decoded = msg.decode('utf-8', errors='replace')
-        return {'found': True, 'method': 'directional', 'length': length,
-                'message': decoded[:200],
-                'findings': [f'Bidi decode ({length}b): {decoded[:80]}']}
     except Exception as e:
         return {'error': str(e), 'found': False}
+    msg = text_core.decode_directional(text)
+    if not msg:
+        return {'found': False}
+    length = len(msg.encode('utf-8'))
+    return {'found': True, 'method': 'directional', 'length': length,
+            'message': msg[:200],
+            'findings': [f'Bidi decode ({length}b): {msg[:80]}']}
 
 
 def decode_hangul_filler(data: bytes) -> Dict[str, Any]:
-    """Decode Hangul filler steganography (U+3164=1, space=0).
-
-    Handles partial messages where cover text has fewer spaces than payload needs.
-    """
+    """Decode Hangul filler steganography (U+3164=1, space=0)."""
     try:
         text = data.decode('utf-8')
-        hf_count = text.count('\u3164')
-        if hf_count == 0:
-            return {'found': False}
-        bits = []
-        for ch in text:
-            if ch == '\u3164': bits.append('1')
-            elif ch == ' ': bits.append('0')
-        if len(bits) < 16:
-            return {'found': False}
-        length = int(''.join(bits[:16]), 2)
-        if length <= 0 or length > 5000:
-            return {'found': False}
-        # Decode as many bytes as we have bits for (may be partial)
-        available_bytes = (len(bits) - 16) // 8
-        decode_bytes = min(length, available_bytes)
-        msg = bytearray()
-        for i in range(16, 16 + decode_bytes * 8, 8):
-            if i + 8 <= len(bits):
-                msg.append(int(''.join(bits[i:i+8]), 2))
-        decoded = msg.decode('utf-8', errors='replace')
-        partial = decode_bytes < length
-        return {'found': True, 'method': 'hangul_filler',
-                'length': length, 'decoded_bytes': decode_bytes,
-                'partial': partial, 'message': decoded[:200],
-                'findings': [f'Hangul ({decode_bytes}/{length}b{"*" if partial else ""}): {decoded[:80]}']}
     except Exception as e:
         return {'error': str(e), 'found': False}
+    if '\u3164' not in text:
+        return {'found': False}
+    msg = text_core.decode_hangul(text)
+    if not msg:
+        return {'found': False}
+    length = len(msg.encode('utf-8'))
+    return {'found': True, 'method': 'hangul_filler',
+            'length': length, 'decoded_bytes': length,
+            'partial': False, 'message': msg[:200],
+            'findings': [f'Hangul ({length}/{length}b): {msg[:80]}']}
 
 
 def decode_math_alphanumeric(data: bytes) -> Dict[str, Any]:
     """Decode math bold substitution (bold=1, normal=0)."""
     try:
         text = data.decode('utf-8')
-        bits = []
-        for ch in text:
-            o = ord(ch)
-            if 0x1D400 <= o <= 0x1D419 or 0x1D41A <= o <= 0x1D433:
-                bits.append('1')
-            elif ch.isascii() and ch.isalpha():
-                bits.append('0')
-        if len(bits) < 16:
-            return {'found': False}
-        length = int(''.join(bits[:16]), 2)
-        if length <= 0 or length > (len(bits) - 16) // 8:
-            return {'found': False}
-        msg = bytearray()
-        for i in range(16, 16 + length * 8, 8):
-            if i + 8 <= len(bits):
-                msg.append(int(''.join(bits[i:i+8]), 2))
-        decoded = msg.decode('utf-8', errors='replace')
-        return {'found': True, 'method': 'math_alpha', 'length': length,
-                'message': decoded[:200],
-                'findings': [f'Math alpha ({length}b): {decoded[:80]}']}
     except Exception as e:
         return {'error': str(e), 'found': False}
+    msg = text_core.decode_mathbold(text)
+    if not msg:
+        return {'found': False}
+    length = len(msg.encode('utf-8'))
+    return {'found': True, 'method': 'math_alpha', 'length': length,
+            'message': msg[:200],
+            'findings': [f'Math alpha ({length}b): {msg[:80]}']}
 
 
 def decode_emoji_skin_tone(data: bytes) -> Dict[str, Any]:
     """Decode emoji skin tone steganography (4 tones = 2 bits each)."""
     try:
         text = data.decode('utf-8')
-        TONES = {'\U0001F3FB': 0, '\U0001F3FC': 1, '\U0001F3FE': 2, '\U0001F3FF': 3}
-        pairs = [TONES[c] for c in text if c in TONES]
-        if len(pairs) < 4:
-            return {'found': False}
-        msg = bytearray()
-        for i in range(0, len(pairs) - 3, 4):
-            msg.append((pairs[i] << 6) | (pairs[i+1] << 4) | (pairs[i+2] << 2) | pairs[i+3])
-        decoded = msg.decode('utf-8', errors='replace')
-        printable = sum(1 for c in decoded if c.isprintable())
-        if printable > len(decoded) * 0.5:
-            return {'found': True, 'method': 'emoji_skin_tone', 'length': len(msg),
-                    'message': decoded[:200],
-                    'findings': [f'Skin tone ({len(msg)}b): {decoded[:80]}']}
-        return {'found': False}
     except Exception as e:
         return {'error': str(e), 'found': False}
+    msg = text_core.decode_skintone(text)
+    if not msg:
+        return {'found': False}
+    printable = sum(1 for c in msg if c.isprintable())
+    if printable <= len(msg) * 0.5:
+        return {'found': False}
+    length = len(msg.encode('utf-8'))
+    return {'found': True, 'method': 'emoji_skin_tone', 'length': length,
+            'message': msg[:200],
+            'findings': [f'Skin tone ({length}b): {msg[:80]}']}
 
 
 # ============== ADVANCED STEGANALYSIS ==============
@@ -2825,6 +2851,10 @@ def _register_all_tools():
     TOOL_REGISTRY.register('detect_hangul_filler_steg', detect_hangul_filler_steg)
     TOOL_REGISTRY.register('detect_emoji_steg', detect_emoji_steg)
     TOOL_REGISTRY.register('detect_capitalization_steg', detect_capitalization_steg)
+    TOOL_REGISTRY.register('detect_math_bold_steg', detect_math_bold_steg)
+    TOOL_REGISTRY.register('detect_braille_steg', detect_braille_steg)
+    TOOL_REGISTRY.register('detect_emoji_substitution_steg', detect_emoji_substitution_steg)
+    TOOL_REGISTRY.register('detect_skintone_steg', detect_skintone_steg)
     # Advanced steganalysis
     TOOL_REGISTRY.register('rs_analysis', rs_analysis)
     TOOL_REGISTRY.register('sample_pairs_analysis', sample_pairs_analysis)

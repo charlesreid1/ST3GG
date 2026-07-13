@@ -897,6 +897,10 @@ _TEXT_STEG_DETECTORS = (
     "detect_hangul_filler_steg",
     "detect_capitalization_steg",
     "detect_emoji_steg",
+    "detect_math_bold_steg",
+    "detect_braille_steg",
+    "detect_emoji_substitution_steg",
+    "detect_skintone_steg",
     "decode_directional_override",
     "decode_hangul_filler",
     "decode_math_alphanumeric",
@@ -1017,8 +1021,11 @@ async def execute_list_techniques(**_kw) -> str:
         "encode_metadata": "Hide a payload in a PNG text (tEXt/iTXt/zTXt) or private chunk.",
         "text_encode": (
             "Hide a payload in plain text via zero_width, homoglyph, whitespace, "
-            "invisible_ink, variation, combining, confusable, directional, or "
-            "hangul. Round-trip-compatible with the browser Text Lab."
+            "invisible_ink, variation, combining, confusable, directional, hangul, "
+            "mathbold, braille, emoji, skintone, or capitalization. Round-trip-"
+            "compatible with the browser Text Lab (except capitalization, which is "
+            "Python-only). braille/emoji/skintone append the payload as its own "
+            "block after the cover — visibly perturbed, not invisible."
         ),
         "text_decode": "Recover a payload from a stego text produced by text_encode (or the browser).",
         "text_capacity": "Pre-flight: how many payload bytes a given cover can carry under a text-steg method.",
@@ -1315,15 +1322,19 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": (
             "Hide a secret string inside a cover text using a text-steg technique. "
             "Method must be one of: zero_width, homoglyph, whitespace, invisible_ink, "
-            "variation, combining, confusable, directional, hangul. "
+            "variation, combining, confusable, directional, hangul, mathbold, braille, "
+            "emoji, skintone, capitalization. "
             "Supply the cover as either inline text (cover_text) or a file path (cover_path). "
             "Returns the stego text inline, or writes it to output_path if given. "
-            "Round-trip-compatible with the browser Text Lab in index.html."
+            "Round-trip-compatible with the browser Text Lab in index.html (except "
+            "capitalization, which is Python-only). braille, emoji, and skintone append "
+            "the payload as its own block after the cover (separated by '\\n\\n') — "
+            "the stego is visibly perturbed, not invisible."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, or hangul."},
+                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
                 "secret": {"type": "string", "description": "The secret string to hide."},
                 "cover_text": {"type": "string", "description": "Cover text supplied inline."},
                 "cover_path": {"type": "string", "description": "Filesystem path to a UTF-8 cover file (alternative to cover_text)."},
@@ -1337,13 +1348,13 @@ TOOL_SCHEMAS: dict[str, dict] = {
             "Recover a hidden secret from a stego text produced by stegg_text_encode "
             "(or by the browser Text Lab). Method must be one of: zero_width, homoglyph, "
             "whitespace, invisible_ink, variation, combining, confusable, directional, "
-            "hangul. Supply the stego as inline text (stego_text) or a file path "
-            "(stego_path)."
+            "hangul, mathbold, braille, emoji, skintone, capitalization. Supply the stego "
+            "as inline text (stego_text) or a file path (stego_path)."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, or hangul."},
+                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
                 "stego_text": {"type": "string", "description": "Stego text supplied inline."},
                 "stego_path": {"type": "string", "description": "Filesystem path to a UTF-8 stego file (alternative to stego_text)."},
             },
@@ -1353,14 +1364,16 @@ TOOL_SCHEMAS: dict[str, dict] = {
     "stegg_text_capacity": {
         "description": (
             "Pre-flight: how many payload bytes will fit in this cover under this method. "
-            "Use before stegg_text_encode when the cover might be too small. Most methods "
-            "(homoglyph, whitespace, variation, combining, confusable, hangul) use a "
-            "16-bit length prefix and will raise TextStegCapacityError on undersized covers."
+            "Use before stegg_text_encode when the cover might be too small. Length-prefixed "
+            "methods (homoglyph, whitespace, variation, combining, confusable, hangul, "
+            "mathbold, capitalization) will raise TextStegCapacityError on undersized covers. "
+            "braille, emoji, and skintone append the payload as its own block after the cover "
+            "(like zero_width today), so payload_bytes_max is None for those."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, or hangul."},
+                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
                 "cover_text": {"type": "string", "description": "Cover text supplied inline."},
                 "cover_path": {"type": "string", "description": "Filesystem path to a UTF-8 cover file (alternative to cover_text)."},
             },
