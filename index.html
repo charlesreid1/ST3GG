@@ -8259,14 +8259,27 @@
                     }
 
                 } else if (method === 'combining') {
+                    // Look-ahead walker: on ASCII letter, peek at next char; if CGJ
+                    // emit '1' and skip both, else emit '0'. Mirrors the encoder,
+                    // which writes <letter><CGJ> for 1-bits and <letter> alone for
+                    // 0-bits (so a naive classify loop would double-count 1-bits).
                     let bits = '';
-                    for (const ch of input) {
-                        if (ch === '\u034F') bits += '1';
-                        else if (ch.match(/[a-zA-Z]/)) bits += '0';
+                    for (let i = 0; i < input.length; i++) {
+                        const ch = input[i];
+                        if (ch.match(/[a-zA-Z]/)) {
+                            if (input[i + 1] === '\u034F') { bits += '1'; i++; }
+                            else { bits += '0'; }
+                        }
                     }
                     if (bits.length >= 16) {
                         const len = parseInt(bits.slice(0,16), 2);
-                        if (len > 0) { let m=''; for(let i=16;i<16+len*8&&i+8<=bits.length;i+=8) m+=String.fromCharCode(parseInt(bits.slice(i,i+8),2)); result=m; }
+                        if (len > 0) {
+                            const bytes = [];
+                            for (let i = 16; i + 8 <= 16 + len * 8 && i + 8 <= bits.length; i += 8) {
+                                bytes.push(parseInt(bits.slice(i, i + 8), 2));
+                            }
+                            result = new TextDecoder().decode(new Uint8Array(bytes));
+                        }
                     }
 
                 } else if (method === 'confusable') {
