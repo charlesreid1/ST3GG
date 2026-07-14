@@ -9,6 +9,29 @@ from __future__ import annotations
 
 from . import image, meta, text, triage
 
+# Re-export individual executors so callers can still do
+#   `from st3ggmcp.tools import execute_text_encode`
+# the way they did before tools.py was split into a package.
+from .image import (  # noqa: F401
+    execute_carve,
+    execute_decode_manual,
+    execute_detect_trailing,
+    execute_encode_manual,
+    execute_encode_metadata,
+    execute_lsb_smart_scan,
+    execute_read_metadata,
+    execute_read_png_chunks,
+)
+from .meta import execute_list_techniques  # noqa: F401
+from .text import (  # noqa: F401
+    execute_text_capacity,
+    execute_text_decode,
+    execute_text_encode,
+    execute_text_steg,
+    execute_text_steg_message,
+)
+from .triage import execute_triage  # noqa: F401
+
 _MODULES = (image, triage, text, meta)
 
 TOOL_EXECUTORS: dict = {}
