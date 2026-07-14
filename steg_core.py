@@ -1295,6 +1295,215 @@ def smart_extract(
     return None
 
 
+# ============== DCT STEGANOGRAPHY (frequency-domain, JPEG-survivable) ==============
+#
+# Port of the DCT encode/decode in index.html so the core Python library covers
+# the same technique the Web UI does. Same wire format ("DCTS" magic + strength
+# + big-endian length + payload), same mid-frequency embedding position, same
+# three robustness settings — so encodes made in the browser round-trip in
+# Python and vice-versa.
+
+DCT_MAGIC = b"DCTS"
+DCT_HEADER_SIZE = 9  # 4 magic + 1 strength + 4 length (big-endian)
+
+# Robustness -> quantization strength. Higher strength survives more compression
+# but distorts the image more visibly.
+DCT_STRENGTHS = {"low": 10, "medium": 25, "high": 50}
+
+# Mid-frequency zig-zag position used for embedding — matches the JS
+# DCT_EMBED_POSITIONS[0] in index.html.
+DCT_EMBED_POS = (0, 1)
+
+
+def _dct_matrix(n: int) -> np.ndarray:
+    """Orthonormal DCT-II basis matrix, same convention as the JS side."""
+    k = np.arange(n)
+    j = np.arange(n)
+    m = np.sqrt(2.0 / n) * np.cos(((2 * j[None, :] + 1) * k[:, None] * np.pi) / (2 * n))
+    m[0, :] = 1.0 / np.sqrt(n)
+    return m
+
+
+def _luminance(pixels: np.ndarray) -> np.ndarray:
+    """Rec.601 luma from an (H,W,>=3) uint8 array — matches the JS coefficients."""
+    return (
+        0.299 * pixels[..., 0].astype(np.float64)
+        + 0.587 * pixels[..., 1].astype(np.float64)
+        + 0.114 * pixels[..., 2].astype(np.float64)
+    )
+
+
+def dct_encode(
+    image: Image.Image,
+    data: bytes,
+    robustness: str = "medium",
+    block_size: int = 8,
+    output_path: Optional[str] = None,
+) -> Image.Image:
+    """Embed bytes into an image's luminance DCT coefficients (one bit / block).
+
+    Survives JPEG-style recompression to a degree controlled by ``robustness``:
+    ``"low"`` is subtlest but fragile, ``"high"`` is most robust but visible.
+    Interop-compatible with the DCT tool in index.html.
+    """
+    if robustness not in DCT_STRENGTHS:
+        raise ValueError(f"robustness must be one of {list(DCT_STRENGTHS)}")
+    if block_size <= 0 or block_size > 32:
+        raise ValueError("block_size must be in 1..32")
+
+    strength = DCT_STRENGTHS[robustness]
+
+    img = image.convert("RGBA")
+    pixels = np.array(img, dtype=np.uint8)
+    height, width = pixels.shape[:2]
+
+    header = bytearray(DCT_HEADER_SIZE)
+    header[0:4] = DCT_MAGIC
+    header[4] = strength
+    struct.pack_into(">I", header, 5, len(data))
+    full_data = bytes(header) + data
+
+    bits = np.unpackbits(np.frombuffer(full_data, dtype=np.uint8))
+
+    blocks_x = width // block_size
+    blocks_y = height // block_size
+    capacity = blocks_x * blocks_y
+    if len(bits) > capacity:
+        raise ValueError(
+            f"DCT capacity exceeded: need {len(bits)} bits, have {capacity} "
+            f"(image is {width}x{height}, block_size={block_size})"
+        )
+
+    m = _dct_matrix(block_size)
+    m_t = m.T
+    cy, cx = DCT_EMBED_POS
+
+    lum = _luminance(pixels)
+    bit_idx = 0
+    for by in range(blocks_y):
+        if bit_idx >= len(bits):
+            break
+        for bx in range(blocks_x):
+            if bit_idx >= len(bits):
+                break
+            y0 = by * block_size
+            x0 = bx * block_size
+            block = lum[y0 : y0 + block_size, x0 : x0 + block_size]
+
+            dct_block = m @ block @ m_t
+
+            coeff = dct_block[cy, cx]
+            q = np.floor(coeff / strength)
+            bit = int(bits[bit_idx])
+            dct_block[cy, cx] = (q + (0.75 if bit else 0.25)) * strength
+
+            reconstructed = m_t @ dct_block @ m
+            new_lum = np.clip(reconstructed, 0.0, 255.0)
+
+            old_lum = block
+            with np.errstate(divide="ignore", invalid="ignore"):
+                ratio = np.where(old_lum > 0, new_lum / old_lum, 1.0)
+
+            for ch in range(3):
+                scaled = pixels[y0 : y0 + block_size, x0 : x0 + block_size, ch].astype(
+                    np.float64
+                ) * ratio
+                pixels[y0 : y0 + block_size, x0 : x0 + block_size, ch] = np.clip(
+                    np.round(scaled), 0, 255
+                ).astype(np.uint8)
+
+            bit_idx += 1
+
+    result = Image.fromarray(pixels, "RGBA")
+    if output_path:
+        result.save(output_path, format="PNG", optimize=False)
+    return result
+
+
+def dct_decode(image: Image.Image, block_size: int = 8) -> bytes:
+    """Recover bytes previously hidden by :func:`dct_encode`.
+
+    Auto-detects the strength (low/medium/high) by searching for the DCTS
+    magic + a self-consistent strength byte. Raises ``ValueError`` if nothing
+    is found.
+    """
+    if block_size <= 0 or block_size > 32:
+        raise ValueError("block_size must be in 1..32")
+
+    img = image.convert("RGBA")
+    pixels = np.array(img, dtype=np.uint8)
+    height, width = pixels.shape[:2]
+
+    blocks_x = width // block_size
+    blocks_y = height // block_size
+    if blocks_x == 0 or blocks_y == 0:
+        raise ValueError("image too small for the given block_size")
+
+    m = _dct_matrix(block_size)
+    m_t = m.T
+    cy, cx = DCT_EMBED_POS
+
+    lum = _luminance(pixels)
+    coeffs = np.empty(blocks_x * blocks_y, dtype=np.float64)
+    idx = 0
+    for by in range(blocks_y):
+        for bx in range(blocks_x):
+            y0 = by * block_size
+            x0 = bx * block_size
+            block = lum[y0 : y0 + block_size, x0 : x0 + block_size]
+            dct_block = m @ block @ m_t
+            coeffs[idx] = dct_block[cy, cx]
+            idx += 1
+
+    def decode_at(strength: int) -> np.ndarray:
+        q = np.floor(coeffs / strength)
+        remainder = coeffs - q * strength
+        return (remainder >= strength / 2).astype(np.uint8)
+
+    def bits_to_bytes(bits: np.ndarray) -> bytes:
+        pad = (-len(bits)) % 8
+        if pad:
+            bits = np.concatenate([bits, np.zeros(pad, dtype=np.uint8)])
+        return np.packbits(bits).tobytes()
+
+    for strength in (DCT_STRENGTHS["low"], DCT_STRENGTHS["medium"], DCT_STRENGTHS["high"]):
+        bits = decode_at(strength)
+        as_bytes = bits_to_bytes(bits)
+        if len(as_bytes) < DCT_HEADER_SIZE:
+            continue
+        if as_bytes[:4] != DCT_MAGIC:
+            continue
+        header_strength = as_bytes[4]
+        if header_strength != strength:
+            continue
+        length = struct.unpack(">I", as_bytes[5:9])[0]
+        if length > len(as_bytes) - DCT_HEADER_SIZE or length > 10_000_000:
+            continue
+        return as_bytes[DCT_HEADER_SIZE : DCT_HEADER_SIZE + length]
+
+    raise ValueError("no DCT steganography header found")
+
+
+def dct_capacity(image: Image.Image, block_size: int = 8) -> Dict[str, Any]:
+    """Report how many payload bytes fit in ``image`` under DCT embedding."""
+    if block_size <= 0 or block_size > 32:
+        raise ValueError("block_size must be in 1..32")
+    width, height = image.size
+    blocks_x = width // block_size
+    blocks_y = height // block_size
+    capacity_bits = blocks_x * blocks_y
+    usable_bytes = max(0, capacity_bits // 8 - DCT_HEADER_SIZE)
+    return {
+        "dimensions": (width, height),
+        "block_size": block_size,
+        "blocks": (blocks_x, blocks_y),
+        "capacity_bits": capacity_bits,
+        "header_bytes": DCT_HEADER_SIZE,
+        "usable_bytes": usable_bytes,
+        "human": _human_readable_size(usable_bytes),
+    }
+
+
 # ============== LEGACY COMPATIBILITY ==============
 
 # Keep old function signatures working

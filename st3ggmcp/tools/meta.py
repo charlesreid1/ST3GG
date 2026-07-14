@@ -20,6 +20,7 @@ async def execute_list_techniques(**_kw) -> str:
             "png_chunks":    "stegg_read_png_chunks — full PNG chunk dump for deep inspection.",
             "lsb_smart_scan":"stegg_lsb_smart_scan — sweep of common LSB configurations (channel presets x bit depths x strategies).",
             "lsb_manual":    "stegg_decode_manual — LSB decode with a specific channels/bits/strategy recipe.",
+            "dct_decode":    "stegg_dct_decode — recover a DCT-hidden payload (frequency-domain, survives JPEG recompression). Use this when LSB scans come up empty on a JPEG-round-tripped image.",
             "carve":         "stegg_carve — try ZIP / GZip / TAR / PDF / SQLite / SVG / PCAP / JPEG / audio-LSB decoders on a file or byte range.",
         },
         "text_and_emoji_detect": {
@@ -37,6 +38,7 @@ async def execute_list_techniques(**_kw) -> str:
         "encode": {
             "image_lsb":      "stegg_encode_manual — hide via LSB with explicit channels/bits/strategy recipe.",
             "image_metadata": "stegg_encode_metadata — hide in a PNG text (tEXt/iTXt/zTXt) or private chunk.",
+            "image_dct":      "stegg_dct_encode — hide via DCT (frequency-domain). Slower and lower capacity than LSB, but medium/high robustness survives JPEG recompression (which destroys LSB). Use stegg_dct_capacity to pre-flight fit.",
             "text_encode": (
                 "stegg_text_encode — hide in text/emoji via one of: zero_width, homoglyph, "
                 "whitespace, invisible_ink, variation, combining, confusable, directional, "
