@@ -62,7 +62,7 @@ It runs **100% in your browser** (static site, no server) or as a **Python CLI/T
 | Channel Options | RGB only | **15 presets** (R, G, B, A, RG, RB, RA, GB, GA, BA, RGB, RGA, RBA, GBA, RGBA) |
 | Bit Depth | 1 bit fixed | **1-8 bits per channel** (adjustable) |
 | Encoding Strategies | Sequential | **4 strategies** (sequential, interleaved, spread, randomized) |
-| Nested Steg | - | **Up to 11 layers deep** (Matryoshka mode) |
+| Nested Steg | - | **Up to 11 layers deep** (Matryoshka mode — CLI + API) |
 | Channel Cipher | - | **Novel cross-channel hopping** (SPECTER) |
 | Compression Survival | - | **F5 survives JPEG/social media; DCT designed for compression resistance** |
 | Smart Decode | - | **120+ config auto-detection** |
@@ -88,7 +88,7 @@ Data exfiltration doesn't always look like data exfiltration. ST3GG lets red tea
 - **Network protocol covert channels** — data hidden in DNS queries, ICMP payloads, TCP sequence numbers, HTTP headers
 - **Unicode steganography** — invisible homoglyphs, zero-width chars, variation selectors, confusable whitespace
 - **Compression-resistant encoding** — F5 mode operates directly on JPEG coefficients (proven to survive social media); DCT mode designed for compression resistance
-- **Multi-layer nesting** — up to 11 recursive layers of steganography (Matryoshka mode)
+- **Multi-layer nesting** — tested to 11 recursive layers; practical depth bounded by carrier capacity (see `stegg matryoshka plan`)
 - **Ghost Mode** — AES-256 encryption + bit scrambling + noise decoys for maximum evasion
 
 *If your DLP can't catch it, you need to know that before the adversary does.*
@@ -123,7 +123,7 @@ Simulate data exfiltration through steganographic channels during engagements. T
 Use ALLSIGHT to scan suspicious files for hidden payloads. Run exhaustive analysis against every known encoding method. Build detection rules from the comprehensive example library. Train analysts on what steganographic artifacts look like in the wild.
 
 ### CTF Players & Competitive Hackers
-The ultimate steg toolkit for Capture The Flag competitions. Encode and decode across every channel/bit/strategy combination. Auto-detect unknown configurations with Smart Scan. Unwrap multi-layered Matryoshka challenges automatically.
+The ultimate steg toolkit for Capture The Flag competitions. Encode and decode across every channel/bit/strategy combination. Auto-detect unknown configurations with Smart Scan. Unwrap multi-layered Matryoshka challenges with `stegg matryoshka decode` or `stegg analyze --recursive`.
 
 ### Digital Forensics & Incident Response
 Analyze seized media for steganographic communication channels. Detect hidden data in image attachments, document metadata, audio files, and network captures. Identify which encoding technique was used and extract the hidden payload.
@@ -209,7 +209,7 @@ An attacker would need to know the channel pattern, the password for unscramblin
 
 ### Matryoshka Mode — Recursive Nesting
 
-Hide images within images within images — up to **11 layers deep**. The smart decoder automatically detects PNG magic bytes and recursively unwraps every layer. Russian nesting dolls, but for secrets.
+Hide images within images within images — tested to **11 layers deep**. Encode nested payloads from the CLI (`stegg matryoshka encode`), decode recursively (`stegg matryoshka decode`), or auto-detect nested layers in any image with `stegg analyze --recursive`. The library API (`matryoshka_core`) is importable for scripting. Russian nesting dolls, but for secrets.
 
 ### DCT Mode — Compression Resistant
 
