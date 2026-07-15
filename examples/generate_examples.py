@@ -2077,67 +2077,16 @@ def generate_midi_hidden():
 def generate_pcap_hidden():
     """Create a PCAP file with the Plinian divider hidden in packet payloads."""
     print("  Generating PCAP with hidden packet data...")
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    secret = PLINIAN_DIVIDER.encode('utf-8')
-    import time
-
-    # PCAP global header
-    pcap = struct.pack('<IHHiIII',
-        0xa1b2c3d4,  # Magic
-        2, 4,        # Version 2.4
-        0,           # Timezone (GMT)
-        0,           # Sigfigs
-        65535,       # Snaplen
-        1,           # Link type: Ethernet
+    config = NetworkStegConfig(
+        method=StegoMethod.IP_TTL,
+        wire_format=WireFormat.IP4_UDP,
     )
-
-    def make_packet(src_ip, dst_ip, payload, ts_sec):
-        """Build a simple UDP packet wrapped in Ethernet + IP headers."""
-        # UDP header
-        src_port, dst_port = 12345, 53
-        udp_len = 8 + len(payload)
-        udp = struct.pack('>HHHH', src_port, dst_port, udp_len, 0)
-        udp += payload
-
-        # IP header (simplified, no checksum)
-        ip_len = 20 + len(udp)
-        ip_header = struct.pack('>BBHHHBBH4s4s',
-            0x45, 0, ip_len,  # Version, IHL, TOS, Total length
-            0x1234, 0x4000,   # ID, Flags+Fragment
-            64, 17, 0,        # TTL, Protocol (UDP), Checksum
-            bytes(map(int, src_ip.split('.'))),
-            bytes(map(int, dst_ip.split('.'))),
-        )
-
-        # Ethernet header
-        eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'  # dst + src + type (IP)
-        frame = eth + ip_header + udp
-
-        # PCAP packet header
-        pkt_len = len(frame)
-        pkt_header = struct.pack('<IIII', ts_sec, 0, pkt_len, pkt_len)
-        return pkt_header + frame
-
-    ts = int(time.time())
-    # Normal-looking DNS query packets, with the secret split across them
-    chunk_size = len(secret) // 4 + 1
-    packets = []
-    for i in range(4):
-        chunk = secret[i * chunk_size:(i + 1) * chunk_size]
-        if chunk:
-            packets.append(make_packet(
-                f'192.168.1.{10 + i}', '8.8.8.8',
-                chunk, ts + i
-            ))
-    # Also include the full secret in one packet
-    packets.append(make_packet('10.0.0.1', '10.0.0.2', secret, ts + 5))
-
-    for pkt in packets:
-        pcap += pkt
-
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_hidden.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
+        f.write(pcap_bytes)
     print(f"    -> {path}")
     return path
 
@@ -3332,58 +3281,18 @@ def generate_emoji_substitution():
 def generate_dns_tunnel_pcap():
     """Create a PCAP with Plinian divider hidden in DNS query names."""
     print("  Generating DNS tunneling PCAP...")
-    import base64
-    import time
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    secret = PLINIAN_DIVIDER.encode('utf-8')
-    # Base32-encode for DNS-safe label characters
-    encoded = base64.b32encode(secret).decode().lower().rstrip('=')
-
-    # Split into DNS-safe labels (max 63 chars each)
-    labels = [encoded[i:i+60] for i in range(0, len(encoded), 60)]
-
-    pcap = struct.pack('<IHHiIII',
-        0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)  # PCAP header
-
-    ts = int(time.time())
-
-    for i, label in enumerate(labels):
-        # Build DNS query
-        domain = f"{label}.steg.example.com"
-        dns_query = b'\x00\x01'  # Transaction ID
-        dns_query += b'\x01\x00'  # Standard query
-        dns_query += b'\x00\x01\x00\x00\x00\x00\x00\x00'  # 1 question
-
-        # Encode domain name as DNS wire format
-        for part in domain.split('.'):
-            dns_query += bytes([len(part)]) + part.encode('ascii')
-        dns_query += b'\x00'  # Root label
-        dns_query += b'\x00\x01'  # Type A
-        dns_query += b'\x00\x01'  # Class IN
-
-        # UDP header
-        udp_len = 8 + len(dns_query)
-        udp = struct.pack('>HHHH', 12345 + i, 53, udp_len, 0) + dns_query
-
-        # IP header
-        ip_len = 20 + len(udp)
-        ip_hdr = struct.pack('>BBHHHBBH4s4s',
-            0x45, 0, ip_len, 0x1234 + i, 0x4000,
-            64, 17, 0,
-            bytes([192, 168, 1, 100]),
-            bytes([8, 8, 8, 8]))
-
-        # Ethernet
-        eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'
-        frame = eth + ip_hdr + udp
-
-        pkt_hdr = struct.pack('<IIII', ts + i, 0, len(frame), len(frame))
-        pcap += pkt_hdr + frame
-
+    config = NetworkStegConfig(
+        method=StegoMethod.DNS_LABEL,
+        wire_format=WireFormat.IP4_UDP_DNS,
+        cover_domain="steg.example.com",
+    )
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_dns_tunnel.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
-    print(f"    -> {path} ({len(labels)} DNS queries)")
+        f.write(pcap_bytes)
+    print(f"    -> {path}")
     return path
 
 
@@ -3394,57 +3303,16 @@ def generate_dns_tunnel_pcap():
 def generate_icmp_steg_pcap():
     """Create a PCAP with Plinian divider hidden in ICMP echo request payloads."""
     print("  Generating ICMP steganography PCAP...")
-    import time
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    secret = PLINIAN_DIVIDER.encode('utf-8')
-    pcap = struct.pack('<IHHiIII',
-        0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)
-
-    ts = int(time.time())
-    chunk_size = 32
-
-    for i in range(0, len(secret), chunk_size):
-        chunk = secret[i:i + chunk_size]
-        # Pad with random-looking filler
-        payload = chunk + bytes(range(len(chunk), 56))
-
-        # ICMP echo request
-        icmp_type = 8  # Echo request
-        icmp_code = 0
-        icmp_id = 0x1234
-        icmp_seq = i // chunk_size
-        # Checksum placeholder (0)
-        icmp = struct.pack('>BBHHH', icmp_type, icmp_code, 0, icmp_id, icmp_seq)
-        icmp += payload
-
-        # Calculate ICMP checksum
-        cksum = 0
-        for j in range(0, len(icmp), 2):
-            if j + 1 < len(icmp):
-                cksum += (icmp[j] << 8) + icmp[j + 1]
-            else:
-                cksum += icmp[j] << 8
-        while cksum >> 16:
-            cksum = (cksum & 0xFFFF) + (cksum >> 16)
-        cksum = ~cksum & 0xFFFF
-        icmp = struct.pack('>BBHHH', icmp_type, icmp_code, cksum, icmp_id, icmp_seq) + payload
-
-        # IP header (protocol 1 = ICMP)
-        ip_len = 20 + len(icmp)
-        ip_hdr = struct.pack('>BBHHHBBH4s4s',
-            0x45, 0, ip_len, 0x5678 + i, 0x4000,
-            64, 1, 0,  # TTL=64, Protocol=1 (ICMP)
-            bytes([192, 168, 1, 100]),
-            bytes([8, 8, 8, 8]))
-
-        eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'
-        frame = eth + ip_hdr + icmp
-        pkt_hdr = struct.pack('<IIII', ts + i, 0, len(frame), len(frame))
-        pcap += pkt_hdr + frame
-
+    config = NetworkStegConfig(
+        method=StegoMethod.ICMP_PAYLOAD,
+        wire_format=WireFormat.IP4_ICMP,
+    )
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_icmp_steg.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
+        f.write(pcap_bytes)
     print(f"    -> {path}")
     return path
 
@@ -3454,63 +3322,22 @@ def generate_icmp_steg_pcap():
 # =============================================================================
 
 def generate_tcp_covert_pcap():
-    """Create a PCAP with Plinian divider hidden in TCP header fields.
-
-    Encodes 4 bytes per SYN packet in the Initial Sequence Number (ISN),
-    and additional bytes in the TCP timestamp option.
-    """
+    """Create a PCAP with Plinian divider hidden in TCP ISN fields."""
     print("  Generating TCP covert channel PCAP...")
-    import time
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    secret = PLINIAN_DIVIDER.encode('utf-8')
-    pcap = struct.pack('<IHHiIII',
-        0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)
-
-    ts = int(time.time())
-
-    # Encode 4 bytes in ISN + 4 bytes in TCP timestamp per packet
-    chunk_size = 8
-    for i in range(0, len(secret), chunk_size):
-        chunk = secret[i:i + chunk_size]
-
-        # ISN carries first 4 bytes
-        isn_bytes = chunk[:4].ljust(4, b'\x00')
-        isn = struct.unpack('>I', isn_bytes)[0]
-
-        # TCP timestamp carries next 4 bytes
-        ts_bytes = chunk[4:8].ljust(4, b'\x00')
-        ts_val = struct.unpack('>I', ts_bytes)[0]
-
-        # TCP header (SYN packet with timestamp option)
-        src_port = 49152 + (i // chunk_size)
-        dst_port = 443
-        tcp_flags = 0x02  # SYN
-        # TCP header: 20 bytes base + 12 bytes options (timestamps)
-        # Option: kind=8, length=10, TSval, TSecr=0, + 2 bytes NOP padding
-        tcp_opts = struct.pack('>BBII', 8, 10, ts_val, 0) + b'\x01\x01'  # NOP NOP
-        tcp_hdr_len = (20 + len(tcp_opts)) // 4
-        tcp = struct.pack('>HHIIBBHHH',
-            src_port, dst_port, isn, 0,
-            (tcp_hdr_len << 4), tcp_flags,
-            65535, 0, 0)
-        tcp += tcp_opts
-
-        # IP header
-        ip_len = 20 + len(tcp)
-        ip_hdr = struct.pack('>BBHHHBBH4s4s',
-            0x45, 0, ip_len, 0xABCD + i, 0x4000,
-            64, 6, 0,  # Protocol=6 (TCP)
-            bytes([10, 0, 0, 1]),
-            bytes([93, 184, 216, 34]))
-
-        eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'
-        frame = eth + ip_hdr + tcp
-        pkt_hdr = struct.pack('<IIII', ts + i, 0, len(frame), len(frame))
-        pcap += pkt_hdr + frame
-
+    config = NetworkStegConfig(
+        method=StegoMethod.TCP_ISN,
+        wire_format=WireFormat.IP4_TCP,
+        src_ip="10.0.0.1",
+        dst_ip="93.184.216.34",
+        sport=49152,
+        dport=443,
+    )
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_tcp_covert.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
+        f.write(pcap_bytes)
     print(f"    -> {path}")
     return path
 
@@ -3522,55 +3349,17 @@ def generate_tcp_covert_pcap():
 def generate_http_header_pcap():
     """Create a PCAP with Plinian divider hidden in HTTP custom headers."""
     print("  Generating HTTP header smuggling PCAP...")
-    import base64
-    import time
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    secret = PLINIAN_DIVIDER.encode('utf-8')
-    encoded_b64 = base64.b64encode(secret).decode()
-    hex_encoded = secret.hex()
-
-    # Build an HTTP request with hidden headers
-    http_req = (
-        f"GET /index.html HTTP/1.1\r\n"
-        f"Host: www.example.com\r\n"
-        f"User-Agent: Mozilla/5.0 (compatible; StegBot/3.0)\r\n"
-        f"Accept: text/html\r\n"
-        f"X-Request-ID: {hex_encoded}\r\n"
-        f"X-Correlation-Token: {encoded_b64}\r\n"
-        f"X-Debug-Info: {PLINIAN_DIVIDER}\r\n"
-        f"Cookie: session={encoded_b64}; theme=dark\r\n"
-        f"Connection: keep-alive\r\n"
-        f"\r\n"
-    ).encode('utf-8')
-
-    pcap = struct.pack('<IHHiIII',
-        0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)
-
-    ts = int(time.time())
-
-    # TCP segment with HTTP payload
-    tcp = struct.pack('>HHIIBBHHH',
-        49200, 80,
-        1000, 0,
-        (5 << 4), 0x18,  # ACK+PSH, data offset=5 (20 bytes)
-        65535, 0, 0)
-    tcp += http_req
-
-    ip_len = 20 + len(tcp)
-    ip_hdr = struct.pack('>BBHHHBBH4s4s',
-        0x45, 0, ip_len, 0x1111, 0x4000,
-        64, 6, 0,
-        bytes([192, 168, 1, 100]),
-        bytes([93, 184, 216, 34]))
-
-    eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'
-    frame = eth + ip_hdr + tcp
-    pkt_hdr = struct.pack('<IIII', ts, 0, len(frame), len(frame))
-    pcap += pkt_hdr + frame
-
+    config = NetworkStegConfig(
+        method=StegoMethod.HTTP_HEADER,
+        wire_format=WireFormat.IP4_TCP_HTTP,
+        dst_ip="93.184.216.34",
+    )
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_http_headers.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
+        f.write(pcap_bytes)
     print(f"    -> {path}")
     return path
 
@@ -4394,37 +4183,17 @@ def generate_misspelling():
 def generate_ip_ttl_covert():
     """Create a PCAP with the Plinian divider hidden in IP TTL values."""
     print("  Generating IP TTL covert channel PCAP...")
-    import time
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    msg_bytes = PLINIAN_DIVIDER.encode('utf-8')
-
-    # PCAP global header
-    pcap = struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)
-
-    ts = int(time.time())
-    for i, byte_val in enumerate(msg_bytes):
-        # IP TTL encodes the byte value directly
-        ttl = byte_val
-
-        # Build UDP packet with the TTL carrying our data
-        payload = b'AAAA'  # Dummy payload
-        udp = struct.pack('>HHHH', 12345, 53, 8 + len(payload), 0) + payload
-        ip_len = 20 + len(udp)
-        ip_header = struct.pack('>BBHHHBBH4s4s',
-            0x45, 0, ip_len, 0x1234 + i, 0x4000,
-            ttl, 17, 0,  # TTL carries the hidden byte
-            bytes([192, 168, 1, 100]),
-            bytes([8, 8, 8, 8]),
-        )
-        eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'
-        frame = eth + ip_header + udp
-        pkt_header = struct.pack('<IIII', ts + i, 0, len(frame), len(frame))
-        pcap += pkt_header + frame
-
+    config = NetworkStegConfig(
+        method=StegoMethod.IP_TTL,
+        wire_format=WireFormat.IP4_UDP,
+    )
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_ttl_covert.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
-    print(f"    -> {path} ({len(msg_bytes)} bytes in TTL fields)")
+        f.write(pcap_bytes)
+    print(f"    -> {path}")
     return path
 
 
@@ -4435,37 +4204,21 @@ def generate_ip_ttl_covert():
 def generate_ip_id_covert():
     """Create a PCAP with the Plinian divider hidden in IP Identification fields."""
     print("  Generating IP ID covert channel PCAP...")
-    import time
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    msg_bytes = PLINIAN_DIVIDER.encode('utf-8')
-
-    pcap = struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)
-
-    ts = int(time.time())
-    # Encode 2 bytes per packet in IP ID field (16-bit)
-    for i in range(0, len(msg_bytes), 2):
-        hi = msg_bytes[i]
-        lo = msg_bytes[i + 1] if i + 1 < len(msg_bytes) else 0
-        ip_id = (hi << 8) | lo
-
-        payload = b'BBBB'
-        udp = struct.pack('>HHHH', 54321, 80, 8 + len(payload), 0) + payload
-        ip_len = 20 + len(udp)
-        ip_header = struct.pack('>BBHHHBBH4s4s',
-            0x45, 0, ip_len, ip_id, 0x4000,
-            64, 17, 0,
-            bytes([10, 0, 0, 1]),
-            bytes([10, 0, 0, 2]),
-        )
-        eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'
-        frame = eth + ip_header + udp
-        pkt_header = struct.pack('<IIII', ts + i, 0, len(frame), len(frame))
-        pcap += pkt_header + frame
-
+    config = NetworkStegConfig(
+        method=StegoMethod.IP_ID,
+        wire_format=WireFormat.IP4_UDP,
+        src_ip="10.0.0.1",
+        dst_ip="10.0.0.2",
+        sport=54321,
+        dport=80,
+    )
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_ipid_covert.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
-    print(f"    -> {path} ({len(msg_bytes)} bytes in IP ID fields)")
+        f.write(pcap_bytes)
+    print(f"    -> {path}")
     return path
 
 
@@ -4476,40 +4229,21 @@ def generate_ip_id_covert():
 def generate_tcp_window_covert():
     """Create a PCAP with the Plinian divider hidden in TCP window size fields."""
     print("  Generating TCP window size covert PCAP...")
-    import time
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    msg_bytes = PLINIAN_DIVIDER.encode('utf-8')
-    pcap = struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)
-    ts = int(time.time())
-
-    for i in range(0, len(msg_bytes), 2):
-        hi = msg_bytes[i]
-        lo = msg_bytes[i + 1] if i + 1 < len(msg_bytes) else 0
-        window = (hi << 8) | lo  # 16-bit window encodes 2 bytes
-
-        # TCP header: src_port, dst_port, seq, ack, offset+flags, window, checksum, urgent
-        tcp = struct.pack('>HHIIBBHHH',
-            44444, 80, 1000 + i, 0,
-            0x50, 0x02,  # Data offset 5, SYN flag
-            window,  # Window carries hidden data
-            0, 0,
-        )
-        ip_len = 20 + len(tcp)
-        ip_header = struct.pack('>BBHHHBBH4s4s',
-            0x45, 0, ip_len, 0x2000 + i, 0x4000,
-            64, 6, 0,  # Protocol 6 = TCP
-            bytes([172, 16, 0, 1]),
-            bytes([93, 184, 216, 34]),
-        )
-        eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'
-        frame = eth + ip_header + tcp
-        pkt_header = struct.pack('<IIII', ts + i, 0, len(frame), len(frame))
-        pcap += pkt_header + frame
-
+    config = NetworkStegConfig(
+        method=StegoMethod.TCP_WINDOW,
+        wire_format=WireFormat.IP4_TCP,
+        src_ip="172.16.0.1",
+        dst_ip="93.184.216.34",
+        sport=44444,
+        dport=80,
+    )
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_tcp_window.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
-    print(f"    -> {path} ({len(msg_bytes)} bytes in TCP window fields)")
+        f.write(pcap_bytes)
+    print(f"    -> {path}")
     return path
 
 
@@ -4520,39 +4254,21 @@ def generate_tcp_window_covert():
 def generate_tcp_urgent_covert():
     """Create a PCAP with the Plinian divider in TCP urgent pointer fields."""
     print("  Generating TCP urgent pointer covert PCAP...")
-    import time
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    msg_bytes = PLINIAN_DIVIDER.encode('utf-8')
-    pcap = struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)
-    ts = int(time.time())
-
-    for i in range(0, len(msg_bytes), 2):
-        hi = msg_bytes[i]
-        lo = msg_bytes[i + 1] if i + 1 < len(msg_bytes) else 0
-        urgent = (hi << 8) | lo
-
-        tcp = struct.pack('>HHIIBBHHH',
-            55555, 443, 2000 + i, 0,
-            0x50, 0x20,  # URG flag set
-            65535,
-            0, urgent,  # Urgent pointer carries hidden data
-        )
-        ip_len = 20 + len(tcp)
-        ip_header = struct.pack('>BBHHHBBH4s4s',
-            0x45, 0, ip_len, 0x3000 + i, 0x4000,
-            64, 6, 0,
-            bytes([192, 168, 10, 5]),
-            bytes([104, 18, 32, 68]),
-        )
-        eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'
-        frame = eth + ip_header + tcp
-        pkt_header = struct.pack('<IIII', ts + i, 0, len(frame), len(frame))
-        pcap += pkt_header + frame
-
+    config = NetworkStegConfig(
+        method=StegoMethod.TCP_URGENT,
+        wire_format=WireFormat.IP4_TCP,
+        src_ip="192.168.10.5",
+        dst_ip="104.18.32.68",
+        sport=55555,
+        dport=443,
+    )
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_tcp_urgent.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
-    print(f"    -> {path} ({len(msg_bytes)} bytes in TCP urgent ptrs)")
+        f.write(pcap_bytes)
+    print(f"    -> {path}")
     return path
 
 
@@ -4563,47 +4279,22 @@ def generate_tcp_urgent_covert():
 def generate_dns_txt_record():
     """Create a PCAP with the Plinian divider in a DNS TXT record response."""
     print("  Generating DNS TXT record PCAP...")
-    import time, base64
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    secret = PLINIAN_DIVIDER.encode('utf-8')
-    encoded = base64.b64encode(secret)
-
-    pcap = struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)
-    ts = int(time.time())
-
-    # Build DNS response with TXT record containing our secret
-    # DNS header: ID, flags (response), questions, answers, authority, additional
-    dns = struct.pack('>HHHHHH', 0xABCD, 0x8180, 1, 1, 0, 0)
-
-    # Question section: _steg.example.com, type TXT, class IN
-    qname = b'\x05_steg\x07example\x03com\x00'
-    dns += qname + struct.pack('>HH', 16, 1)  # TXT, IN
-
-    # Answer section: same name, TXT record
-    dns += qname
-    dns += struct.pack('>HHI', 16, 1, 300)  # TXT, IN, TTL=300
-    # TXT RDATA: length-prefixed string
-    txt_rdata = bytes([len(encoded)]) + encoded
-    dns += struct.pack('>H', len(txt_rdata)) + txt_rdata
-
-    # Wrap in UDP/IP/Ethernet
-    udp = struct.pack('>HHHH', 53, 12345, 8 + len(dns), 0) + dns
-    ip_len = 20 + len(udp)
-    ip_header = struct.pack('>BBHHHBBH4s4s',
-        0x45, 0, ip_len, 0x5678, 0x4000,
-        64, 17, 0,
-        bytes([8, 8, 8, 8]),
-        bytes([192, 168, 1, 100]),
+    config = NetworkStegConfig(
+        method=StegoMethod.DNS_TXT,
+        wire_format=WireFormat.IP4_UDP_DNS,
+        src_ip="8.8.8.8",
+        dst_ip="192.168.1.100",
+        sport=53,
+        dport=12345,
+        cover_domain="steg.example.com",
     )
-    eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'
-    frame = eth + ip_header + udp
-    pkt_header = struct.pack('<IIII', ts, 0, len(frame), len(frame))
-    pcap += pkt_header + frame
-
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_dns_txt.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
-    print(f"    -> {path} (TXT record: {len(encoded)} bytes)")
+        f.write(pcap_bytes)
+    print(f"    -> {path}")
     return path
 
 
@@ -4614,44 +4305,21 @@ def generate_dns_txt_record():
 def generate_covert_timing():
     """Create a PCAP with the Plinian divider in inter-packet timing (microseconds)."""
     print("  Generating covert timing channel PCAP...")
+    from network_core import NetworkStegConfig, StegoMethod, WireFormat, encode
 
-    msg_bytes = PLINIAN_DIVIDER.encode('utf-8')
-    bits = ''.join(format(b, '08b') for b in msg_bytes)
-    length_bits = format(len(msg_bytes), '016b')
-    all_bits = length_bits + bits
-
-    pcap = struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)
-
-    base_ts = 1700000000
-    current_usec = 0
-
-    for i, bit in enumerate(all_bits):
-        # bit=0: short delay (10000 usec = 10ms)
-        # bit=1: long delay (50000 usec = 50ms)
-        delay = 50000 if bit == '1' else 10000
-        current_usec += delay
-
-        ts_sec = base_ts + current_usec // 1000000
-        ts_usec = current_usec % 1000000
-
-        payload = struct.pack('>I', i)  # Sequence number
-        udp = struct.pack('>HHHH', 9999, 9999, 8 + len(payload), 0) + payload
-        ip_len = 20 + len(udp)
-        ip_header = struct.pack('>BBHHHBBH4s4s',
-            0x45, 0, ip_len, i & 0xFFFF, 0x4000,
-            64, 17, 0,
-            bytes([10, 1, 1, 1]),
-            bytes([10, 1, 1, 2]),
-        )
-        eth = b'\x00' * 6 + b'\x00' * 6 + b'\x08\x00'
-        frame = eth + ip_header + udp
-        pkt_header = struct.pack('<IIII', ts_sec, ts_usec, len(frame), len(frame))
-        pcap += pkt_header + frame
-
+    config = NetworkStegConfig(
+        method=StegoMethod.COVERT_TIMING,
+        wire_format=WireFormat.IP4_UDP,
+        src_ip="10.1.1.1",
+        dst_ip="10.1.1.2",
+        sport=9999,
+        dport=9999,
+    )
+    pcap_bytes = encode(PLINIAN_DIVIDER.encode('utf-8'), config)
     path = os.path.join(OUTPUT_DIR, 'example_covert_timing.pcap')
     with open(path, 'wb') as f:
-        f.write(pcap)
-    print(f"    -> {path} ({len(all_bits)} bits in packet timing)")
+        f.write(pcap_bytes)
+    print(f"    -> {path}")
     return path
 
 
