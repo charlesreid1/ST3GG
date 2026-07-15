@@ -12,7 +12,6 @@ from PIL import Image
 
 import analysis_tools as at
 import injector
-import pvd_core
 import steg_core
 
 from ._common import (
@@ -517,7 +516,7 @@ async def execute_encode_metadata(
 # ---------------------------------------------------------------------------
 # stegg_pvd_encode / stegg_pvd_decode / stegg_pvd_capacity
 # ---------------------------------------------------------------------------
-_PVD_RANGE_TYPES = tuple(pvd_core.PVD_RANGES.keys())
+_PVD_RANGE_TYPES = tuple(steg_core.PVD_RANGES.keys())
 _PVD_DIRECTIONS = ("horizontal", "vertical", "both")
 
 
@@ -543,14 +542,14 @@ async def execute_pvd_capacity(
 
     def work():
         img = Image.open(io.BytesIO(data))
-        bits = pvd_core.capacity_bits(img, direction=direction, range_type=range_type)
+        bits = steg_core.pvd_capacity_bits(img, direction=direction, range_type=range_type)
         return {
             "size": list(img.size),
             "mode": img.mode,
             "direction": direction,
             "range_type": range_type,
             "capacity_bits": bits,
-            "capacity_bytes": pvd_core.capacity_bytes(img, direction=direction, range_type=range_type),
+            "capacity_bytes": steg_core.pvd_capacity_bytes(img, direction=direction, range_type=range_type),
         }
 
     try:
@@ -583,14 +582,14 @@ async def execute_pvd_encode(
 
     def work():
         img = Image.open(io.BytesIO(data))
-        cap = pvd_core.capacity_bytes(img, direction=direction, range_type=range_type)
+        cap = steg_core.pvd_capacity_bytes(img, direction=direction, range_type=range_type)
         if len(payload) > cap:
             return {"__err__": (
                 f"payload is {len(payload)} bytes but PVD carrier has only "
                 f"{cap} usable bytes for direction={direction}, range_type={range_type}."
             )}
         try:
-            encoded_img = pvd_core.encode(img, payload, direction=direction, range_type=range_type)
+            encoded_img = steg_core.pvd_encode(img, payload, direction=direction, range_type=range_type)
         except ValueError as exc:
             return {"__err__": str(exc)}
         buf = io.BytesIO()
@@ -663,7 +662,7 @@ async def execute_pvd_decode(
     def work():
         img = Image.open(io.BytesIO(data))
         try:
-            payload = pvd_core.decode(
+            payload = steg_core.pvd_decode(
                 img,
                 direction=direction,
                 range_type=range_type,

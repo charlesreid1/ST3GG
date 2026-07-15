@@ -25,8 +25,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-import pvd_core
-from pvd_core import PVD_RANGES, find_pvd_range
+import steg_core
+from steg_core import PVD_RANGES, find_pvd_range
 
 FIXTURE = Path(__file__).parent / "fixtures" / "pvd" / "js_reference.json"
 
@@ -81,8 +81,8 @@ ROUNDTRIP_PAYLOADS = [
 @pytest.mark.parametrize("payload", ROUNDTRIP_PAYLOADS)
 def test_roundtrip(direction, range_type, payload):
     carrier = _noisy_carrier(64, seed=42)
-    stego = pvd_core.encode(carrier, payload, direction=direction, range_type=range_type)
-    out = pvd_core.decode(stego, direction=direction, range_type=range_type)
+    stego = steg_core.pvd_encode(carrier, payload, direction=direction, range_type=range_type)
+    out = steg_core.pvd_decode(stego, direction=direction, range_type=range_type)
     assert out == payload
 
 
@@ -110,7 +110,7 @@ def test_encoded_bytes_match_js_reference(direction, range_type, js_reference, j
     payload = bytes.fromhex(js_reference["payload_hex"])
     case = js_reference["cases"][f"{direction}::{range_type}"]
 
-    stego = pvd_core.encode(js_carrier, payload, direction=direction, range_type=range_type)
+    stego = steg_core.pvd_encode(js_carrier, payload, direction=direction, range_type=range_type)
     py_hex = np.asarray(stego, dtype=np.uint8).tobytes().hex()
     assert py_hex == case["encoded_hex"], (
         f"Python encoded bytes diverge from JS reference for {direction}/{range_type}."
@@ -121,8 +121,8 @@ def test_encoded_bytes_match_js_reference(direction, range_type, js_reference, j
 @pytest.mark.parametrize("range_type", RANGE_TYPES)
 def test_decode_matches_js_payload(direction, range_type, js_reference, js_carrier):
     payload = bytes.fromhex(js_reference["payload_hex"])
-    stego = pvd_core.encode(js_carrier, payload, direction=direction, range_type=range_type)
-    decoded = pvd_core.decode(stego, direction=direction, range_type=range_type)
+    stego = steg_core.pvd_encode(js_carrier, payload, direction=direction, range_type=range_type)
+    decoded = steg_core.pvd_decode(stego, direction=direction, range_type=range_type)
     assert decoded == payload
 
 
@@ -134,12 +134,12 @@ def test_decode_matches_js_payload(direction, range_type, js_reference, js_carri
 @pytest.mark.parametrize("range_type", RANGE_TYPES)
 def test_capacity_is_honest_lower_bound(direction, range_type):
     carrier = _noisy_carrier(48, seed=7)
-    cap = pvd_core.capacity_bytes(carrier, direction=direction, range_type=range_type)
+    cap = steg_core.pvd_capacity_bytes(carrier, direction=direction, range_type=range_type)
     # Half the natural capacity should always fit; embedding shifts diffs
     # around but not enough to invalidate a payload this small.
     payload = b"P" * (cap // 2)
-    stego = pvd_core.encode(carrier, payload, direction=direction, range_type=range_type)
-    assert pvd_core.decode(stego, direction=direction, range_type=range_type) == payload
+    stego = steg_core.pvd_encode(carrier, payload, direction=direction, range_type=range_type)
+    assert steg_core.pvd_decode(stego, direction=direction, range_type=range_type) == payload
 
 
 def test_both_direction_capacity_is_max_not_sum():
@@ -150,9 +150,9 @@ def test_both_direction_capacity_is_max_not_sum():
     the vertical pass corrupt on decode.
     """
     carrier = _noisy_carrier(48, seed=7)
-    h = pvd_core.capacity_bytes(carrier, direction="horizontal")
-    v = pvd_core.capacity_bytes(carrier, direction="vertical")
-    both = pvd_core.capacity_bytes(carrier, direction="both")
+    h = steg_core.pvd_capacity_bytes(carrier, direction="horizontal")
+    v = steg_core.pvd_capacity_bytes(carrier, direction="vertical")
+    both = steg_core.pvd_capacity_bytes(carrier, direction="both")
     assert both == max(h, v)
 
 
@@ -163,11 +163,11 @@ def test_both_direction_fails_on_spillover_payload():
     that "fixes" it has to update this test consciously.
     """
     carrier = _noisy_carrier(48, seed=7)
-    h_cap = pvd_core.capacity_bytes(carrier, direction="horizontal")
+    h_cap = steg_core.pvd_capacity_bytes(carrier, direction="horizontal")
     payload = b"X" * (h_cap + 100)  # forces spill into vertical pass
-    stego = pvd_core.encode(carrier, payload, direction="both")
+    stego = steg_core.pvd_encode(carrier, payload, direction="both")
     with pytest.raises(ValueError):
-        pvd_core.decode(stego, direction="both")
+        steg_core.pvd_decode(stego, direction="both")
 
 
 def test_payload_too_large_raises_value_error():
@@ -175,20 +175,20 @@ def test_payload_too_large_raises_value_error():
     carrier = _noisy_carrier(4, seed=1)
     huge = b"Q" * 10_000
     with pytest.raises(ValueError, match="payload does not fit"):
-        pvd_core.encode(carrier, huge, direction="horizontal", range_type="wu-tsai")
+        steg_core.pvd_encode(carrier, huge, direction="horizontal", range_type="wu-tsai")
 
 
 def test_encode_rejects_unknown_range_type():
     carrier = _noisy_carrier(16, seed=1)
     with pytest.raises(ValueError, match="unknown range_type"):
-        pvd_core.encode(carrier, b"hi", range_type="not-a-real-table")
+        steg_core.pvd_encode(carrier, b"hi", range_type="not-a-real-table")
 
 
 def test_decode_rejects_unknown_direction():
     carrier = _noisy_carrier(16, seed=1)
-    stego = pvd_core.encode(carrier, b"hi")
+    stego = steg_core.pvd_encode(carrier, b"hi")
     with pytest.raises(ValueError, match="unknown direction"):
-        pvd_core.decode(stego, direction="diagonal")
+        steg_core.pvd_decode(stego, direction="diagonal")
 
 
 # ---------------------------------------------------------------------------
@@ -204,9 +204,9 @@ def test_wrong_range_type_on_decode_fails_or_returns_wrong_bytes():
     """
     carrier = _noisy_carrier(64, seed=99)
     payload = b"exact-bytes-please"
-    stego = pvd_core.encode(carrier, payload, range_type="wu-tsai")
+    stego = steg_core.pvd_encode(carrier, payload, range_type="wu-tsai")
     try:
-        out = pvd_core.decode(stego, range_type="wide")
+        out = steg_core.pvd_decode(stego, range_type="wide")
     except ValueError:
         return  # Loud failure, ideal.
     assert out != payload
@@ -215,9 +215,9 @@ def test_wrong_range_type_on_decode_fails_or_returns_wrong_bytes():
 def test_wrong_direction_on_decode_fails_or_returns_wrong_bytes():
     carrier = _noisy_carrier(64, seed=99)
     payload = b"exact-bytes-please"
-    stego = pvd_core.encode(carrier, payload, direction="horizontal")
+    stego = steg_core.pvd_encode(carrier, payload, direction="horizontal")
     try:
-        out = pvd_core.decode(stego, direction="vertical")
+        out = steg_core.pvd_decode(stego, direction="vertical")
     except ValueError:
         return
     assert out != payload
@@ -230,9 +230,9 @@ def test_wrong_direction_on_decode_fails_or_returns_wrong_bytes():
 def test_decode_is_idempotent():
     carrier = _noisy_carrier(64, seed=5)
     payload = b"read me twice"
-    stego = pvd_core.encode(carrier, payload)
-    a = pvd_core.decode(stego)
-    b = pvd_core.decode(stego)
+    stego = steg_core.pvd_encode(carrier, payload)
+    a = steg_core.pvd_decode(stego)
+    b = steg_core.pvd_decode(stego)
     assert a == b == payload
 
 
@@ -246,8 +246,8 @@ def test_solid_color_carrier_roundtrips():
     arr = np.full((32, 32, 3), 128, dtype=np.uint8)
     carrier = Image.fromarray(arr, mode="RGB")
     payload = b"flat carrier"
-    stego = pvd_core.encode(carrier, payload)
-    assert pvd_core.decode(stego) == payload
+    stego = steg_core.pvd_encode(carrier, payload)
+    assert steg_core.pvd_decode(stego) == payload
 
 
 def test_rgba_input_is_accepted():
@@ -256,14 +256,14 @@ def test_rgba_input_is_accepted():
     arr[..., 3] = 255
     carrier = Image.fromarray(arr, mode="RGBA")
     payload = b"alpha carrier"
-    stego = pvd_core.encode(carrier, payload)
+    stego = steg_core.pvd_encode(carrier, payload)
     assert stego.mode == "RGB"
-    assert pvd_core.decode(stego) == payload
+    assert steg_core.pvd_decode(stego) == payload
 
 
 def test_grayscale_input_is_accepted():
     arr = np.full((32, 32), 90, dtype=np.uint8)
     carrier = Image.fromarray(arr, mode="L")
     payload = b"gray"
-    stego = pvd_core.encode(carrier, payload)
-    assert pvd_core.decode(stego) == payload
+    stego = steg_core.pvd_encode(carrier, payload)
+    assert steg_core.pvd_decode(stego) == payload

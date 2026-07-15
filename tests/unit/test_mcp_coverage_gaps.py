@@ -19,7 +19,7 @@ import pytest
 from PIL import Image
 
 import injector
-import pvd_core
+import steg_core
 
 from st3ggmcp.tools import TOOL_EXECUTORS, TOOL_SCHEMAS
 from st3ggmcp.tools.image import (
@@ -134,7 +134,7 @@ def test_detect_pvd_fires_on_pvd_encoded_image(carrier_png, tmp_path):
     without crashing on real PVD stego and returns a structured verdict.
     """
     carrier = Image.open(carrier_png)
-    stego = pvd_core.encode(carrier, b"secret", direction="horizontal", range_type="wu-tsai")
+    stego = steg_core.pvd_encode(carrier, b"secret", direction="horizontal", range_type="wu-tsai")
     stego_path = tmp_path / "pvd.png"
     stego.save(stego_path, format="PNG")
 
