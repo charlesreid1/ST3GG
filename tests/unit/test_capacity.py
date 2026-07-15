@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from PIL import Image
 
-from steg_core import HEADER_SIZE, calculate_capacity, create_config
+from img_core import HEADER_SIZE, calculate_capacity, create_config
 
 
 @pytest.mark.parametrize("preset,bits,expected_bpp", [

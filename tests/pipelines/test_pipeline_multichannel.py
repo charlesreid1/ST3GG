@@ -11,7 +11,7 @@ import io
 import pytest
 from PIL import Image
 
-from steg_core import create_config, decode, encode
+from img_core import create_config, decode, encode
 
 pytestmark = pytest.mark.pipeline
 

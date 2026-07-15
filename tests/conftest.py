@@ -2,7 +2,7 @@
 
 The project keeps its module code at the repo root (no `src/` layout), so
 this file also ensures the repo root is on `sys.path` for every collected
-test — without it, `import steg_core` fails when pytest is invoked from a
+test — without it, `import img_core` fails when pytest is invoked from a
 different working directory.
 """
 

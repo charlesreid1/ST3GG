@@ -20,8 +20,8 @@ import asyncio
 import json
 
 # Import our steg modules
-import steg_core
-from steg_core import (
+import img_core
+from img_core import (
     encode, decode, create_config, calculate_capacity,
     analyze_image, detect_encoding, CHANNEL_PRESETS,
     Channel, StegConfig, EncodingStrategy, _extract_bit_units,

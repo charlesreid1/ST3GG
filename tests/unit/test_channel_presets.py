@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from steg_core import CHANNEL_PRESETS, Channel, get_channel_preset
+from img_core import CHANNEL_PRESETS, Channel, get_channel_preset
 
 EXPECTED_PRESETS = {
     "R", "G", "B", "A",

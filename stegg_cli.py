@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from PIL import Image
 
-from steg_core import (
+from img_core import (
     encode, decode, create_config, calculate_capacity,
     analyze_image, detect_encoding,
 )

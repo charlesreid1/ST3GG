@@ -1,5 +1,5 @@
 """DCT round-trip and JPEG-survival tests for the frequency-domain steg
-path added to steg_core.
+path added to img_core.
 
 The Web UI's DCT tool was long the only way to reach this technique; these
 tests pin the Python implementation to the same wire format ("DCTS" magic +
@@ -14,7 +14,7 @@ import io
 import pytest
 from PIL import Image
 
-from steg_core import (
+from img_core import (
     DCT_HEADER_SIZE,
     DCT_MAGIC,
     DCT_STRENGTHS,

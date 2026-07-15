@@ -11,7 +11,7 @@ from PIL import Image
 from typing import Optional
 
 # Import our modules
-from steg_core import (
+from img_core import (
     encode, decode, encode_text, decode_text,
     create_config, calculate_capacity, analyze_image,
     detect_encoding, CHANNEL_PRESETS, StegConfig, EncodingStrategy

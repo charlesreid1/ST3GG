@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 import crypto
-from steg_core import create_config, decode, detect_encoding, encode
+from img_core import create_config, decode, detect_encoding, encode
 
 pytestmark = pytest.mark.pipeline
 
