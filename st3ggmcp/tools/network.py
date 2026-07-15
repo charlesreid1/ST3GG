@@ -188,12 +188,49 @@ async def execute_network_methods(**_kw) -> str:
 
 
 # ---------------------------------------------------------------------------
+# stegg_network_detect
+# ---------------------------------------------------------------------------
+async def execute_network_detect(
+    path: str,
+    **_kw,
+) -> str:
+    """Run statistical steganalysis on a PCAP file.
+
+    Examines protocol field distributions (TTL, IP ID, TCP ISN, DNS labels,
+    timing delays, etc.) and flags anomalies regardless of framing.
+    This is a *statistical* detector — it answers "does this PCAP look
+    like it has something hidden?" without needing to know the encoding
+    scheme.
+
+    Args:
+        path: Filesystem path to the PCAP file.
+    """
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+
+    def work():
+        from network_core import analyze_pcap_summary
+        summary = analyze_pcap_summary(data)
+        summary["file"] = meta
+        return summary
+
+    try:
+        result = await run_sync(work)
+    except Exception as exc:
+        logger.exception("network_detect failed")
+        return f"stegg_network_detect error: {exc}"
+    return truncate_json(result)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 EXECUTORS = {
     "stegg_network_encode": execute_network_encode,
     "stegg_network_decode": execute_network_decode,
     "stegg_network_methods": execute_network_methods,
+    "stegg_network_detect": execute_network_detect,
 }
 
 
@@ -270,6 +307,25 @@ SCHEMAS = {
             "type": "object",
             "properties": {},
             "required": [],
+        },
+    },
+    "stegg_network_detect": {
+        "description": (
+            "Run statistical steganalysis on a PCAP file. Examines protocol "
+            "field distributions — TTL entropy, IP ID serial correlation, "
+            "TCP window variance, DNS label length/entropy, inter-packet "
+            "delay bimodality, and more — and flags anomalies regardless of "
+            "framing. Returns per-method verdicts with confidence scores."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Filesystem path to the PCAP file to analyze.",
+                },
+            },
+            "required": ["path"],
         },
     },
 }

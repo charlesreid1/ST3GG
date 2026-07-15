@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import base64
 import io
+import math
 import random
+import re
 import struct
 import zlib
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
 
@@ -985,7 +988,14 @@ def calculate_capacity(config: NetworkStegConfig, max_packets: int = 1000) -> di
 
 
 def list_methods() -> list[dict]:
-    """List all available stego methods with their capacities and valid wire formats."""
+    """List all available stego methods with their capacities and valid wire formats.
+
+    Each entry also includes a ``detectable`` flag indicating whether a
+    statistical detector exists for that method.
+    """
+    # _DETECTORS is defined later in this module; resolved at call time.
+    detectable = set(_DETECTORS.keys())
+
     result: list[dict] = []
     for method in StegoMethod:
         bpp = METHOD_BYTES_PER_PACKET.get(method, 0)
@@ -994,5 +1004,877 @@ def list_methods() -> list[dict]:
             'method': method.value,
             'bytes_per_packet': bpp,
             'wire_formats': [wf.value for wf in wire_formats],
+            'detectable': method.value in detectable,
         })
     return result
+
+
+# ============== STATISTICAL DETECTION ==============
+#
+# Per-method statistical detectors that examine protocol field distributions
+# and flag anomalies regardless of framing.  Each detector takes a list of
+# scapy Packets and a DetectionConfig, and returns a StegDetectResult.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StegDetectResult:
+    """Verdict from a single per-method statistical detector.
+
+    Attributes:
+        method: Stego method name, e.g. ``"ip_ttl"``.
+        suspicious: Whether the detection threshold was exceeded.
+        confidence: Estimated confidence that stego is present (0.0 – 1.0).
+        score: Raw test statistic (higher = more anomalous).
+        threshold: Decision boundary used for this test.
+        test_name: Name of the statistical test applied.
+        details: Per-test breakdown with intermediate values.
+    """
+
+    method: str
+    suspicious: bool
+    confidence: float  # 0.0 – 1.0
+    score: float       # raw test statistic
+    threshold: float   # decision boundary
+    test_name: str
+    details: dict = field(default_factory=dict)
+
+
+@dataclass
+class DetectionConfig:
+    """Tunable thresholds for each detector.
+
+    All thresholds are module-level defaults, overridable per-call.
+    Thresholds are calibrated against common OS / protocol behaviour;
+    raising a threshold reduces false positives, lowering it increases
+    sensitivity.
+    """
+
+    # IP TTL — chi-square against expected OS TTL distribution.
+    # Normal OS TTLs cluster at 64, 128, 255; stego TTLs spread uniformly.
+    ttl_chi_square_threshold: float = 50.0
+
+    # IP ID — runs-test p-value.  OS counters are sequential (few runs);
+    # stego values are structured byte chunks (many runs).
+    ip_id_runs_p_value: float = 0.01
+
+    # TCP ISN / timestamp — entropy threshold in bits per byte.
+    # Crypto-random ISNs have entropy near 8; stego ISNs carry payload
+    # bytes whose entropy depends on content (compressed ≈ 8, text ≈ 4–6).
+    isn_entropy_threshold: float = 6.5
+
+    # TCP window — standard deviation threshold.  Normal windows cluster
+    # around OS defaults (65535, 29200, 8192); stego windows span 16 bits.
+    window_stdev_threshold: float = 20000
+
+    # ICMP payload — entropy threshold.  Normal ICMP payloads are
+    # structured (timestamps, fixed patterns); stego payloads look like
+    # compressed / encrypted data.
+    icmp_entropy_threshold: float = 7.0
+
+    # DNS label — entropy threshold in bits per character.
+    # Normal labels are dictionary words (low entropy); base32 stego
+    # labels approach 5 bits/char uniformly.
+    dns_label_entropy_threshold: float = 4.5
+
+    # DNS TXT — minimum fraction of packets carrying TXT records.
+    # TXT records are rare outside SPF / DKIM; >2 % is suspicious.
+    dns_txt_freq_threshold: float = 0.02
+
+    # Covert timing — bimodality score threshold.
+    # Normal jitter is unimodal; stego timing has two distinct peaks.
+    timing_bimodality_threshold: float = 0.5
+
+    # TCP URG — fraction of TCP packets with URG flag set.
+    # URG is almost never used in normal traffic.
+    tcp_urg_freq_threshold: float = 0.1
+
+    # HTTP — minimum fraction of packets with custom X- headers.
+    http_custom_header_threshold: float = 0.5
+
+    # Minimum number of relevant packets before a detector runs.
+    # Fewer than this and the statistical signal is too weak.
+    min_packets: int = 8
+
+
+# ============== STATISTICAL HELPERS ==============
+
+
+def _detect_entropy(data: bytes | list[int]) -> float:
+    """Shannon entropy in bits per element.  Returns 0.0 for empty input."""
+    if not data:
+        return 0.0
+    counts = Counter(data)
+    total = len(data)
+    return -sum(
+        (c / total) * math.log2(c / total) for c in counts.values() if c > 0
+    )
+
+
+def _detect_normal_cdf(x: float) -> float:
+    """Standard normal CDF via ``math.erf``."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2)))
+
+
+def _detect_chi_square_statistic(
+    observed: dict[int, int],
+    expected_probs: dict[int, float],
+    total: int,
+) -> float:
+    """Compute Pearson chi-square statistic.
+
+    *observed* maps bin → count.  *expected_probs* maps bin → probability
+    (must sum to ≤ 1.0; remaining mass is treated as uniform across
+    unlisted bins).  *total* is the sum of observed counts.
+    """
+    if total == 0:
+        return 0.0
+    chi2 = 0.0
+    listed_mass = sum(expected_probs.values())
+    all_bins = set(observed.keys()) | set(expected_probs.keys())
+    remaining_bins = max(len(all_bins) - len(expected_probs), 1)
+    remaining_mass = max(1.0 - listed_mass, 0.0)
+    for b in all_bins:
+        o = observed.get(b, 0)
+        if b in expected_probs:
+            e = total * expected_probs[b]
+        else:
+            e = total * remaining_mass / remaining_bins
+        if e > 0:
+            chi2 += (o - e) ** 2 / e
+        elif o > 0:
+            chi2 += float('inf')
+    return chi2
+
+
+def _detect_runs_test_pvalue(values: list[int]) -> float:
+    """Wald–Wolfowitz runs test p-value (two-tailed, normal approximation).
+
+    Low p-value → sequence is *more* random than expected by chance.
+    The test detects serial dependence: sequential OS counters produce
+    fewer runs than random data.
+    """
+    n = len(values)
+    if n < 2:
+        return 1.0
+    median = sorted(values)[n // 2]
+    binary = [1 if v > median else 0 for v in values]
+    runs = 1
+    for i in range(1, n):
+        if binary[i] != binary[i - 1]:
+            runs += 1
+    n1 = sum(binary)
+    n0 = n - n1
+    if n1 == 0 or n0 == 0:
+        return 0.0
+    expected = 2.0 * n1 * n0 / n + 1.0
+    var = (
+        2.0 * n1 * n0 * (2.0 * n1 * n0 - n)
+        / (n * n * (n - 1))
+    )
+    if var <= 0:
+        return 0.0
+    z = (runs - expected) / math.sqrt(var)
+    return 2.0 * (1.0 - _detect_normal_cdf(abs(z)))
+
+
+def _detect_frequency_test_pvalue(values: list[int], bits: int = 8) -> float:
+    """NIST SP 800-22 monobit frequency test (approximate)."""
+    if not values:
+        return 1.0
+    ones = 0
+    total_bits = 0
+    for v in values:
+        for j in range(bits):
+            if v & (1 << j):
+                ones += 1
+            total_bits += 1
+    if total_bits == 0:
+        return 1.0
+    proportion = ones / total_bits
+    s_obs = abs(proportion - 0.5) / math.sqrt(0.25 / total_bits)
+    return math.erfc(s_obs / math.sqrt(2))
+
+
+def _detect_bimodality_score(values: list[float]) -> float:
+    """Score bimodality on [0, 1].  0 = unimodal, 1 = clearly bimodal.
+
+    Splits values at median, then compares within-cluster variance to
+    total variance.  Two tight, well-separated clusters produce a high
+    score.
+    """
+    n = len(values)
+    if n < 10:
+        return 0.0
+    sorted_vals = sorted(values)
+    median = sorted_vals[n // 2]
+    lower = [v for v in values if v <= median]
+    upper = [v for v in values if v > median]
+    if len(lower) < 3 or len(upper) < 3:
+        return 0.0
+    total_mean = sum(values) / n
+    total_var = sum((v - total_mean) ** 2 for v in values) / n
+    if total_var == 0:
+        return 0.0
+    lower_mean = sum(lower) / len(lower)
+    upper_mean = sum(upper) / len(upper)
+    lower_var = sum((v - lower_mean) ** 2 for v in lower) / len(lower)
+    upper_var = sum((v - upper_mean) ** 2 for v in upper) / len(upper)
+    within_var = (lower_var * len(lower) + upper_var * len(upper)) / n
+    ratio = 1.0 - (within_var / total_var)
+    return max(0.0, min(1.0, ratio))
+
+
+def _detect_confidence_from_ratio(score: float, threshold: float, direction: str = 'above') -> float:
+    """Map a score + threshold to a [0, 1] confidence.
+
+    *direction*: ``'above'`` means suspicious when score > threshold;
+    ``'below'`` means suspicious when score < threshold.
+    """
+    if direction == 'above':
+        if threshold == 0:
+            return 1.0 if score > 0 else 0.0
+        ratio = score / threshold
+    else:
+        if threshold == 0:
+            return 1.0 if score < float('inf') else 0.0
+        ratio = threshold / max(score, 1e-10)
+    if ratio <= 0:
+        return 0.0
+    return 1.0 - math.exp(-ratio)
+
+
+def _detect_confidence_from_pvalue(p_value: float, alpha: float) -> float:
+    """Map a p-value to confidence.  p < alpha → high confidence."""
+    if p_value <= 0:
+        return 1.0
+    if p_value >= alpha:
+        return 0.0
+    return 1.0 - (p_value / alpha)
+
+
+# ============== PER-METHOD DETECTORS ==============
+#
+# Each detector takes (packets: list[Packet], config: DetectionConfig)
+# and returns a StegDetectResult.
+# ---------------------------------------------------------------------------
+
+
+#: Expected TTL distribution for common OS traffic (RFC 1700 / empirical).
+_DETECT_EXPECTED_TTL_PROBS: dict[int, float] = {
+    64:  0.45,
+    128: 0.30,
+    255: 0.15,
+    32:  0.03,
+    60:  0.02,
+}
+
+
+def _detect_ip_ttl(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect IP TTL stego: chi-square against expected OS TTL distribution."""
+    ttls: list[int] = []
+    for pkt in packets:
+        if IP in pkt:
+            ttls.append(pkt[IP].ttl)
+    if len(ttls) < config.min_packets:
+        return StegDetectResult(
+            method='ip_ttl', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.ttl_chi_square_threshold,
+            test_name='chi_square_expected_os',
+            details={'ttl_count': len(ttls),
+                     'note': f'need ≥{config.min_packets} IP packets'},
+        )
+    observed: dict[int, int] = {}
+    for t in ttls:
+        observed[t] = observed.get(t, 0) + 1
+    chi2 = _detect_chi_square_statistic(observed, _DETECT_EXPECTED_TTL_PROBS, len(ttls))
+    suspicious = chi2 > config.ttl_chi_square_threshold
+    confidence = _detect_confidence_from_ratio(chi2, config.ttl_chi_square_threshold, 'above')
+    entropy_val = _detect_entropy(ttls)
+    return StegDetectResult(
+        method='ip_ttl', suspicious=suspicious,
+        confidence=min(confidence, 1.0), score=chi2,
+        threshold=config.ttl_chi_square_threshold,
+        test_name='chi_square_expected_os',
+        details={
+            'ttl_count': len(ttls), 'chi_square': round(chi2, 2),
+            'entropy': round(entropy_val, 3), 'unique_ttls': len(set(ttls)),
+            'most_common': Counter(ttls).most_common(4),
+        },
+    )
+
+
+def _detect_ip_id(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect IP ID stego: runs test for serial randomness."""
+    ip_ids: list[int] = []
+    for pkt in packets:
+        if IP in pkt:
+            ip_ids.append(pkt[IP].id)
+    if len(ip_ids) < config.min_packets:
+        return StegDetectResult(
+            method='ip_id', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.ip_id_runs_p_value,
+            test_name='runs_test',
+            details={'ip_id_count': len(ip_ids),
+                     'note': f'need ≥{config.min_packets} IP packets'},
+        )
+    p_value = _detect_runs_test_pvalue(ip_ids)
+    suspicious = p_value < config.ip_id_runs_p_value
+    confidence = _detect_confidence_from_pvalue(p_value, config.ip_id_runs_p_value)
+    bytes_data = b''.join(struct.pack('>H', v) for v in ip_ids)
+    entropy_val = _detect_entropy(bytes_data)
+    return StegDetectResult(
+        method='ip_id', suspicious=suspicious,
+        confidence=min(confidence, 1.0), score=p_value,
+        threshold=config.ip_id_runs_p_value,
+        test_name='runs_test',
+        details={
+            'ip_id_count': len(ip_ids), 'runs_p_value': round(p_value, 6),
+            'entropy': round(entropy_val, 3), 'unique_ids': len(set(ip_ids)),
+        },
+    )
+
+
+def _detect_tcp_isn(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect TCP ISN stego: entropy + frequency test."""
+    isns: list[int] = []
+    for pkt in packets:
+        if TCP in pkt and (pkt[TCP].flags & 0x02):
+            isns.append(pkt[TCP].seq)
+    if len(isns) < config.min_packets:
+        return StegDetectResult(
+            method='tcp_isn', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.isn_entropy_threshold,
+            test_name='entropy_frequency',
+            details={'syn_count': len(isns),
+                     'note': f'need ≥{config.min_packets} SYN packets'},
+        )
+    bytes_data = b''.join(struct.pack('>I', v) for v in isns)
+    entropy_val = _detect_entropy(bytes_data)
+    p_value = _detect_frequency_test_pvalue(list(bytes_data), bits=8)
+    suspicious = entropy_val < config.isn_entropy_threshold
+    confidence = _detect_confidence_from_ratio(
+        config.isn_entropy_threshold - entropy_val,
+        config.isn_entropy_threshold * 0.5, 'above',
+    )
+    return StegDetectResult(
+        method='tcp_isn', suspicious=suspicious,
+        confidence=min(max(confidence, 0.0), 1.0),
+        score=entropy_val, threshold=config.isn_entropy_threshold,
+        test_name='entropy_frequency',
+        details={
+            'syn_count': len(isns), 'entropy': round(entropy_val, 3),
+            'frequency_p_value': round(p_value, 6), 'unique_isns': len(set(isns)),
+        },
+    )
+
+
+def _detect_tcp_timestamp(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect TCP timestamp stego: monotonicity check + entropy."""
+    ts_vals: list[int] = []
+    for pkt in packets:
+        if TCP in pkt:
+            for opt in (pkt[TCP].options or []):
+                if isinstance(opt, tuple) and opt[0] == 'Timestamp':
+                    ts_vals.append(opt[1][0])
+                    break
+    if len(ts_vals) < config.min_packets:
+        return StegDetectResult(
+            method='tcp_timestamp', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.isn_entropy_threshold,
+            test_name='monotonicity_entropy',
+            details={'ts_count': len(ts_vals),
+                     'note': f'need ≥{config.min_packets} timestamp packets'},
+        )
+    increases = sum(1 for i in range(1, len(ts_vals)) if ts_vals[i] > ts_vals[i - 1])
+    monotonic_ratio = increases / max(len(ts_vals) - 1, 1)
+    bytes_data = b''.join(struct.pack('>I', v) for v in ts_vals)
+    entropy_val = _detect_entropy(bytes_data)
+    suspicious = monotonic_ratio < 0.6 or entropy_val < config.isn_entropy_threshold
+    confidence = min(max(
+        1.0 - monotonic_ratio,
+        _detect_confidence_from_ratio(
+            config.isn_entropy_threshold - entropy_val,
+            config.isn_entropy_threshold * 0.5, 'above',
+        ),
+    ), 1.0)
+    return StegDetectResult(
+        method='tcp_timestamp', suspicious=suspicious,
+        confidence=confidence, score=1.0 - monotonic_ratio,
+        threshold=0.4,
+        test_name='monotonicity_entropy',
+        details={
+            'ts_count': len(ts_vals), 'monotonic_ratio': round(monotonic_ratio, 3),
+            'entropy': round(entropy_val, 3),
+            'min_ts': min(ts_vals), 'max_ts': max(ts_vals),
+        },
+    )
+
+
+def _detect_tcp_window(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect TCP window stego: standard deviation + outlier ratio."""
+    windows: list[int] = []
+    for pkt in packets:
+        if TCP in pkt:
+            windows.append(pkt[TCP].window)
+    if len(windows) < config.min_packets:
+        return StegDetectResult(
+            method='tcp_window', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.window_stdev_threshold,
+            test_name='stdev_outlier',
+            details={'window_count': len(windows),
+                     'note': f'need ≥{config.min_packets} TCP packets'},
+        )
+    mean_w = sum(windows) / len(windows)
+    variance = sum((w - mean_w) ** 2 for w in windows) / len(windows)
+    stdev = math.sqrt(variance)
+    common_windows = {65535, 29200, 8192, 16384, 32768, 64240, 14600}
+    outlier_ratio = sum(1 for w in windows if w not in common_windows) / len(windows)
+    suspicious = stdev > config.window_stdev_threshold
+    confidence = _detect_confidence_from_ratio(stdev, config.window_stdev_threshold, 'above')
+    return StegDetectResult(
+        method='tcp_window', suspicious=suspicious,
+        confidence=min(confidence, 1.0), score=stdev,
+        threshold=config.window_stdev_threshold,
+        test_name='stdev_outlier',
+        details={
+            'window_count': len(windows), 'stdev': round(stdev, 1),
+            'mean': round(mean_w, 1), 'outlier_ratio': round(outlier_ratio, 3),
+            'range': f'{min(windows)}–{max(windows)}',
+        },
+    )
+
+
+def _detect_tcp_urgent(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect TCP urgent pointer stego: URG flag frequency."""
+    tcp_count = 0
+    urg_count = 0
+    urg_vals: list[int] = []
+    for pkt in packets:
+        if TCP in pkt:
+            tcp_count += 1
+            if pkt[TCP].flags & 0x20:
+                urg_count += 1
+                urg_vals.append(pkt[TCP].urgptr)
+    if tcp_count < config.min_packets:
+        return StegDetectResult(
+            method='tcp_urgent', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.tcp_urg_freq_threshold,
+            test_name='urg_frequency',
+            details={'tcp_count': tcp_count,
+                     'note': f'need ≥{config.min_packets} TCP packets'},
+        )
+    urg_ratio = urg_count / tcp_count if tcp_count > 0 else 0.0
+    suspicious = urg_ratio > config.tcp_urg_freq_threshold
+    confidence = _detect_confidence_from_ratio(urg_ratio, config.tcp_urg_freq_threshold, 'above')
+    entropy_val = _detect_entropy(urg_vals) if urg_vals else 0.0
+    return StegDetectResult(
+        method='tcp_urgent', suspicious=suspicious,
+        confidence=min(confidence, 1.0), score=urg_ratio,
+        threshold=config.tcp_urg_freq_threshold,
+        test_name='urg_frequency',
+        details={
+            'tcp_count': tcp_count, 'urg_count': urg_count,
+            'urg_ratio': round(urg_ratio, 4),
+            'urg_entropy': round(entropy_val, 3) if urg_vals else None,
+        },
+    )
+
+
+def _detect_icmp_payload(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect ICMP payload stego: payload entropy + printable ratio."""
+    payloads: list[bytes] = []
+    for pkt in packets:
+        if ICMP in pkt and Raw in pkt:
+            payloads.append(bytes(pkt[Raw]))
+    if len(payloads) < config.min_packets:
+        return StegDetectResult(
+            method='icmp_payload', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.icmp_entropy_threshold,
+            test_name='payload_entropy',
+            details={'icmp_count': len(payloads),
+                     'note': f'need ≥{config.min_packets} ICMP payload packets'},
+        )
+    all_bytes = b''.join(payloads)
+    entropy_val = _detect_entropy(all_bytes)
+    printable = sum(1 for b in all_bytes if 0x20 <= b < 0x7F or b in (0x09, 0x0A, 0x0D))
+    printable_ratio = printable / len(all_bytes) if all_bytes else 0.0
+    suspicious = entropy_val > config.icmp_entropy_threshold
+    confidence = _detect_confidence_from_ratio(entropy_val, config.icmp_entropy_threshold, 'above')
+    return StegDetectResult(
+        method='icmp_payload', suspicious=suspicious,
+        confidence=min(confidence, 1.0), score=entropy_val,
+        threshold=config.icmp_entropy_threshold,
+        test_name='payload_entropy',
+        details={
+            'icmp_packet_count': len(payloads),
+            'total_payload_bytes': len(all_bytes),
+            'entropy': round(entropy_val, 3),
+            'printable_ratio': round(printable_ratio, 3),
+            'avg_payload_len': len(all_bytes) / len(payloads) if payloads else 0,
+        },
+    )
+
+
+def _detect_dns_label(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect DNS label stego: subdomain entropy + label length."""
+    labels: list[str] = []
+    for pkt in packets:
+        if DNS in pkt and pkt[DNS].qd:
+            qname = pkt[DNS].qd.qname
+            if isinstance(qname, bytes):
+                qname = qname.decode('ascii', errors='replace')
+            first_label = qname.split('.')[0] if '.' in qname else qname
+            if first_label:
+                labels.append(first_label)
+    if len(labels) < config.min_packets:
+        return StegDetectResult(
+            method='dns_label', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.dns_label_entropy_threshold,
+            test_name='label_entropy_length',
+            details={'label_count': len(labels),
+                     'note': f'need ≥{config.min_packets} DNS query packets'},
+        )
+    entropies = [_detect_entropy(l.encode('ascii', errors='replace')) for l in labels]
+    avg_entropy = sum(entropies) / len(entropies) if entropies else 0.0
+    max_entropy = max(entropies) if entropies else 0.0
+    avg_length = sum(len(l) for l in labels) / len(labels) if labels else 0.0
+    max_length = max(len(l) for l in labels) if labels else 0
+    suspicious = avg_entropy > config.dns_label_entropy_threshold
+    confidence = _detect_confidence_from_ratio(avg_entropy, config.dns_label_entropy_threshold, 'above')
+    return StegDetectResult(
+        method='dns_label', suspicious=suspicious,
+        confidence=min(confidence, 1.0), score=avg_entropy,
+        threshold=config.dns_label_entropy_threshold,
+        test_name='label_entropy_length',
+        details={
+            'label_count': len(labels), 'avg_entropy': round(avg_entropy, 3),
+            'max_entropy': round(max_entropy, 3),
+            'avg_length': round(avg_length, 1), 'max_length': max_length,
+            'sample_labels': labels[:5],
+        },
+    )
+
+
+def _detect_dns_txt(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect DNS TXT stego: TXT record frequency + RDATA entropy."""
+    dns_count = 0
+    txt_count = 0
+    txt_data: list[bytes] = []
+    for pkt in packets:
+        if DNS in pkt:
+            dns_count += 1
+            dns_layer = pkt[DNS]
+            for rr_list in (dns_layer.an, dns_layer.ns, dns_layer.ar):
+                if rr_list is None:
+                    continue
+                for rr in (rr_list if isinstance(rr_list, list) else [rr_list]):
+                    rr_type = getattr(rr, 'type', None)
+                    if rr_type == 16:
+                        txt_count += 1
+                        rdata = getattr(rr, 'rdata', None)
+                        if rdata:
+                            for item in (rdata if isinstance(rdata, list) else [rdata]):
+                                if isinstance(item, bytes):
+                                    txt_data.append(item)
+                                elif isinstance(item, str):
+                                    txt_data.append(item.encode('utf-8', errors='replace'))
+    if dns_count < config.min_packets:
+        return StegDetectResult(
+            method='dns_txt', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.dns_txt_freq_threshold,
+            test_name='txt_frequency_entropy',
+            details={'dns_count': dns_count,
+                     'note': f'need ≥{config.min_packets} DNS packets'},
+        )
+    txt_ratio = txt_count / dns_count if dns_count > 0 else 0.0
+    all_txt = b''.join(txt_data)
+    entropy_val = _detect_entropy(all_txt) if all_txt else 0.0
+    suspicious = txt_ratio > config.dns_txt_freq_threshold or entropy_val > 6.0
+    confidence = min(max(
+        _detect_confidence_from_ratio(txt_ratio, config.dns_txt_freq_threshold, 'above'),
+        _detect_confidence_from_ratio(entropy_val, 6.0, 'above'),
+    ), 1.0)
+    return StegDetectResult(
+        method='dns_txt', suspicious=suspicious,
+        confidence=confidence, score=txt_ratio,
+        threshold=config.dns_txt_freq_threshold,
+        test_name='txt_frequency_entropy',
+        details={
+            'dns_count': dns_count, 'txt_count': txt_count,
+            'txt_ratio': round(txt_ratio, 4),
+            'txt_entropy': round(entropy_val, 3), 'total_txt_bytes': len(all_txt),
+        },
+    )
+
+
+#: Common HTTP header names (lowercase) — anything NOT in this set is
+#: flagged as custom.  Based on RFC 7230 + common practice.
+_DETECT_COMMON_HTTP_HEADERS: set[str] = {
+    'host', 'user-agent', 'accept', 'accept-encoding', 'accept-language',
+    'accept-charset', 'authorization', 'cache-control', 'connection',
+    'content-type', 'content-length', 'content-encoding', 'content-language',
+    'content-location', 'content-range', 'cookie', 'date', 'dnt', 'expect',
+    'forwarded', 'from', 'if-match', 'if-modified-since', 'if-none-match',
+    'if-range', 'if-unmodified-since', 'keep-alive', 'last-modified',
+    'location', 'max-forwards', 'origin', 'pragma', 'proxy-authorization',
+    'range', 'referer', 'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site',
+    'sec-fetch-user', 'sec-websocket-key', 'sec-websocket-protocol',
+    'sec-websocket-version', 'server', 'set-cookie', 'te', 'trailer',
+    'transfer-encoding', 'upgrade', 'upgrade-insecure-requests', 'via',
+    'warning', 'www-authenticate', 'x-forwarded-for', 'x-forwarded-host',
+    'x-forwarded-proto', 'x-real-ip', 'x-requested-with',
+}
+
+
+def _detect_http_header(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect HTTP header stego: custom header presence + value entropy."""
+    http_count = 0
+    custom_header_count = 0
+    header_entropies: list[float] = []
+    for pkt in packets:
+        if Raw in pkt and TCP in pkt:
+            raw = bytes(pkt[Raw])
+            try:
+                text = raw.decode('ascii', errors='replace')
+            except Exception:
+                continue
+            if 'HTTP/' not in text and 'GET ' not in text and 'POST ' not in text:
+                continue
+            http_count += 1
+            for line in text.split('\r\n'):
+                m = re.match(r'^([A-Za-z][A-Za-z0-9-]*):\s*(.+)', line)
+                if not m:
+                    continue
+                name, value = m.group(1), m.group(2)
+                is_custom = (
+                    name.lower().startswith('x-')
+                    or name.lower() not in _DETECT_COMMON_HTTP_HEADERS
+                )
+                if is_custom:
+                    custom_header_count += 1
+                    header_entropies.append(_detect_entropy(value.encode('ascii', errors='replace')))
+    if http_count < max(config.min_packets // 2, 2):
+        return StegDetectResult(
+            method='http_header', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.http_custom_header_threshold,
+            test_name='custom_header',
+            details={'http_count': http_count,
+                     'note': f'need ≥{max(config.min_packets // 2, 2)} HTTP packets'},
+        )
+    custom_ratio = custom_header_count / max(http_count, 1)
+    avg_entropy = sum(header_entropies) / len(header_entropies) if header_entropies else 0.0
+    suspicious = (
+        custom_ratio > config.http_custom_header_threshold
+        or avg_entropy > 5.0
+    )
+    confidence = min(max(
+        _detect_confidence_from_ratio(custom_ratio, config.http_custom_header_threshold, 'above'),
+        _detect_confidence_from_ratio(avg_entropy, 5.0, 'above'),
+    ), 1.0)
+    return StegDetectResult(
+        method='http_header', suspicious=suspicious,
+        confidence=confidence, score=custom_ratio,
+        threshold=config.http_custom_header_threshold,
+        test_name='custom_header',
+        details={
+            'http_count': http_count, 'custom_header_count': custom_header_count,
+            'custom_ratio': round(custom_ratio, 3),
+            'avg_header_value_entropy': round(avg_entropy, 3),
+        },
+    )
+
+
+def _detect_covert_timing(packets: list[Packet], config: DetectionConfig) -> StegDetectResult:
+    """Detect covert timing stego: inter-packet delay bimodality."""
+    times: list[float] = []
+    for pkt in packets:
+        if hasattr(pkt, 'time'):
+            times.append(float(pkt.time))
+    if len(times) < config.min_packets + 1:
+        return StegDetectResult(
+            method='covert_timing', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.timing_bimodality_threshold,
+            test_name='bimodality',
+            details={'packet_count': len(times),
+                     'note': f'need ≥{config.min_packets + 1} timestamped packets'},
+        )
+    delays = [times[i + 1] - times[i] for i in range(len(times) - 1)]
+    delays = [d for d in delays if d > 0]
+    if len(delays) < config.min_packets:
+        return StegDetectResult(
+            method='covert_timing', suspicious=False, confidence=0.0,
+            score=0.0, threshold=config.timing_bimodality_threshold,
+            test_name='bimodality',
+            details={'delay_count': len(delays),
+                     'note': f'need ≥{config.min_packets} non-zero delays'},
+        )
+    bimodality = _detect_bimodality_score(delays)
+    suspicious = bimodality > config.timing_bimodality_threshold
+    confidence = _detect_confidence_from_ratio(bimodality, config.timing_bimodality_threshold, 'above')
+    sorted_d = sorted(delays)
+    median_d = sorted_d[len(sorted_d) // 2]
+    lower = [d for d in delays if d <= median_d]
+    upper = [d for d in delays if d > median_d]
+    lower_cv = math.sqrt(
+        sum((d - sum(lower) / len(lower)) ** 2 for d in lower) / len(lower)
+    ) / (sum(lower) / len(lower)) if lower and sum(lower) / len(lower) > 0 else 0
+    upper_cv = math.sqrt(
+        sum((d - sum(upper) / len(upper)) ** 2 for d in upper) / len(upper)
+    ) / (sum(upper) / len(upper)) if upper and sum(upper) / len(upper) > 0 else 0
+    return StegDetectResult(
+        method='covert_timing', suspicious=suspicious,
+        confidence=min(confidence, 1.0), score=bimodality,
+        threshold=config.timing_bimodality_threshold,
+        test_name='bimodality',
+        details={
+            'delay_count': len(delays),
+            'bimodality_score': round(bimodality, 4),
+            'mean_delay': round(sum(delays) / len(delays), 6),
+            'min_delay': round(min(delays), 6),
+            'max_delay': round(max(delays), 6),
+            'lower_cluster_cv': round(lower_cv, 4),
+            'upper_cluster_cv': round(upper_cv, 4),
+        },
+    )
+
+
+# ============== DETECTION DISPATCH TABLE ==============
+
+
+_DETECTORS: dict[str, Callable[[list[Packet], DetectionConfig], StegDetectResult]] = {
+    'ip_ttl':          _detect_ip_ttl,
+    'ip_id':           _detect_ip_id,
+    'tcp_isn':         _detect_tcp_isn,
+    'tcp_timestamp':   _detect_tcp_timestamp,
+    'tcp_window':      _detect_tcp_window,
+    'tcp_urgent':      _detect_tcp_urgent,
+    'icmp_payload':    _detect_icmp_payload,
+    'dns_label':       _detect_dns_label,
+    'dns_txt':         _detect_dns_txt,
+    'http_header':     _detect_http_header,
+    'covert_timing':   _detect_covert_timing,
+}
+
+
+# ============== DETECTION PUBLIC API ==============
+
+
+def analyze_pcap(
+    pcap_data: bytes,
+    detection_config: Optional[DetectionConfig] = None,
+) -> list[StegDetectResult]:
+    """Run all statistical detectors on a PCAP file.
+
+    Examines protocol field distributions (TTL, IP ID, TCP ISN, DNS labels,
+    timing delays, etc.) and flags anomalies regardless of framing.  This is
+    a *statistical* detector — it answers "does this PCAP look like it has
+    something hidden?" without needing to know the encoding scheme.
+
+    Args:
+        pcap_data: Raw PCAP file bytes.
+        detection_config: Optional ``DetectionConfig`` with tuned thresholds.
+
+    Returns:
+        A ``StegDetectResult`` per stego method, sorted by confidence
+        (most suspicious first).
+    """
+    cfg = detection_config or DetectionConfig()
+
+    # Parse PCAP via scapy
+    import tempfile, os as _os
+    tmpdir = tempfile.mkdtemp()
+    try:
+        tmppath = _os.path.join(tmpdir, 'detect.pcap')
+        with open(tmppath, 'wb') as f:
+            f.write(pcap_data)
+        packets = rdpcap(tmppath)
+    except Exception:
+        import shutil as _shutil
+        _shutil.rmtree(tmpdir, ignore_errors=True)
+        return []
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmpdir, ignore_errors=True)
+
+    if not packets:
+        return []
+
+    results: list[StegDetectResult] = []
+    for method_name, detector_fn in _DETECTORS.items():
+        try:
+            result = detector_fn(packets, cfg)
+            results.append(result)
+        except Exception:
+            results.append(StegDetectResult(
+                method=method_name, suspicious=False, confidence=0.0,
+                score=0.0, threshold=0.0, test_name='error',
+                details={'error': 'detector raised an exception'},
+            ))
+
+    results.sort(key=lambda r: r.confidence, reverse=True)
+    return results
+
+
+def analyze_pcap_summary(
+    pcap_data: bytes,
+    detection_config: Optional[DetectionConfig] = None,
+) -> dict:
+    """Run all detectors and return an overall verdict.
+
+    Args:
+        pcap_data: Raw PCAP file bytes.
+        detection_config: Optional ``DetectionConfig`` with tuned thresholds.
+
+    Returns:
+        A dict with keys:
+
+        * ``suspicious`` — bool, whether ANY method flagged
+        * ``overall_confidence`` — float, max confidence across methods
+        * ``findings`` — list of per-method result dicts
+        * ``packets`` — total packet count in the PCAP
+    """
+    raw_results = analyze_pcap(pcap_data, detection_config)
+
+    if not raw_results:
+        return {
+            'suspicious': False,
+            'overall_confidence': 0.0,
+            'findings': [],
+            'packets': 0,
+        }
+
+    # Count packets for the summary
+    import tempfile, os as _os
+    pkt_count = 0
+    tmpdir = tempfile.mkdtemp()
+    try:
+        tmppath = _os.path.join(tmpdir, 'count.pcap')
+        with open(tmppath, 'wb') as f:
+            f.write(pcap_data)
+        pkt_count = len(rdpcap(tmppath))
+    except Exception:
+        pass
+    finally:
+        import shutil as _shutil
+        _shutil.rmtree(tmpdir, ignore_errors=True)
+
+    any_suspicious = any(r.suspicious for r in raw_results)
+    max_confidence = max((r.confidence for r in raw_results), default=0.0)
+
+    return {
+        'suspicious': any_suspicious,
+        'overall_confidence': round(max_confidence, 4),
+        'findings': [
+            {
+                'method': r.method,
+                'suspicious': r.suspicious,
+                'confidence': round(r.confidence, 4),
+                'score': r.score,
+                'test_name': r.test_name,
+                'details': r.details,
+            }
+            for r in raw_results
+        ],
+        'packets': pkt_count,
+    }

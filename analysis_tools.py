@@ -2408,6 +2408,33 @@ def pcap_decode(data: bytes) -> Dict[str, Any]:
     except ImportError:
         pass
 
+    # Statistical steganalysis (no framing required)
+    try:
+        from network_core import analyze_pcap_summary as _stat_summary
+        stat_summary = _stat_summary(data)
+        if stat_summary.get('suspicious'):
+            results['statistical'] = {
+                'overall_confidence': stat_summary.get('overall_confidence', 0),
+                'findings': [
+                    f"{f['method']}: {f['confidence']:.3f}"
+                    for f in stat_summary.get('findings', [])
+                    if f.get('suspicious')
+                ],
+            }
+            for f in stat_summary.get('findings', []):
+                if f.get('suspicious'):
+                    results['methods'][f'stat_{f["method"]}'] = {
+                        'confidence': f['confidence'],
+                        'test': f['test_name'],
+                        'details': f.get('details', {}),
+                    }
+                    results['findings'].append(
+                        f'STAT/{f["method"]}: confidence={f["confidence"]:.3f}'
+                    )
+            results['found'] = True
+    except ImportError:
+        pass
+
     results['suspicious'] = results['found']
     return results
 
@@ -2500,6 +2527,61 @@ def pcap_decode_http_header(data: bytes) -> Dict[str, Any]:
 def pcap_decode_covert_timing(data: bytes) -> Dict[str, Any]:
     from network_core import StegoMethod
     return _pcap_decode_method(data, 'covert_timing', StegoMethod.COVERT_TIMING)
+
+
+# ============== STATISTICAL PCAP DETECTION ==============
+
+
+def pcap_detect_statistical(data: bytes) -> Dict[str, Any]:
+    """Run statistical steganalysis on a PCAP file.
+
+    Examines protocol field distributions (TTL, IP ID, TCP window, DNS
+    labels, timing delays, etc.) and flags anomalies regardless of
+    whether the payload was framed with our NETH header.  This is a
+    *statistical* detector, not a signature scanner — it answers
+    "does this PCAP look like it has something hidden?"
+
+    Each stego method gets its own verdict with confidence scores.
+    """
+    if len(data) < 24:
+        return {'found': False, 'reason': 'Too small to be PCAP'}
+    magic = data[:4]
+    if magic not in (b'\xa1\xb2\xc3\xd4', b'\xd4\xc3\xb2\xa1'):
+        return {'found': False, 'reason': 'Not PCAP'}
+
+    try:
+        from network_core import analyze_pcap_summary as _stat_summary
+        summary = _stat_summary(data)
+    except ImportError:
+        return {'found': False, 'error': 'network_core not available'}
+    except Exception as e:
+        return {'found': False, 'error': f'Statistical analysis failed: {e}'}
+
+    # Build result in traditional analysis_tools format
+    findings_list: list[str] = []
+    for f in summary.get('findings', []):
+        if f.get('suspicious'):
+            findings_list.append(
+                f"{f['method']}: confidence={f['confidence']:.3f} "
+                f"({f['test_name']}: {f.get('score', 0):.3g})"
+            )
+
+    return {
+        'found': summary.get('suspicious', False),
+        'suspicious': summary.get('suspicious', False),
+        'confidence': summary.get('overall_confidence', 0.0),
+        'packets': summary.get('packets', 0),
+        'methods': {
+            f['method']: {
+                'suspicious': f['suspicious'],
+                'confidence': f['confidence'],
+                'test_name': f['test_name'],
+                'details': f.get('details', {}),
+            }
+            for f in summary.get('findings', [])
+        },
+        'findings': findings_list,
+    }
 
 
 # ============== ARCHIVE DECODERS ==============
@@ -2992,6 +3074,7 @@ def _register_all_tools():
     TOOL_REGISTRY.register('pcap_decode_dns_txt', pcap_decode_dns_txt)
     TOOL_REGISTRY.register('pcap_decode_http_header', pcap_decode_http_header)
     TOOL_REGISTRY.register('pcap_decode_covert_timing', pcap_decode_covert_timing)
+    TOOL_REGISTRY.register('pcap_detect_statistical', pcap_detect_statistical)
     TOOL_REGISTRY.register('zip_decode', zip_decode)
     TOOL_REGISTRY.register('tar_decode', tar_decode)
     TOOL_REGISTRY.register('gzip_decode', gzip_decode)
