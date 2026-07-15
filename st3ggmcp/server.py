@@ -1,13 +1,16 @@
-"""ST3GG MCP server: HTTP transport on port 8765.
+"""ST3GG MCP server: HTTP and stdio transports.
 
 Run with:
-    stegg-mcp                    # port 8765
-    stegg-mcp --port 9000        # override
+    stegg-mcp                    # HTTP on port 8765
+    stegg-mcp --port 9000        # HTTP on custom port
+    stegg-mcp-stdio              # stdio (spawned by MCP clients like Claude Code)
 
 Or:
-    python -m st3ggmcp.server
+    python -m st3ggmcp.server           # HTTP
+    python -m st3ggmcp.server --stdio   # stdio (same as stegg-mcp-stdio)
 
-Container-to-container use only. No auth. Bind address defaults to 0.0.0.0.
+HTTP mode: container-to-container use only. No auth. Bind address defaults to 0.0.0.0.
+Stdio mode: the client launches this process; JSON-RPC over stdin/stdout, logs on stderr.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import sys
 from pathlib import Path
 
 from mcp.server import Server
+from mcp.server.stdio import stdio_server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import (
     Resource,
@@ -121,12 +125,57 @@ def build_asgi_app() -> Starlette:
     )
 
 
+async def _run_stdio(log_level: str = "info") -> None:
+    """Run the MCP server over stdin/stdout using the reference MCP stdio transport.
+
+    Logging is configured to stderr -- the stdio transport reserves stdout
+    for JSON-RPC frames, so anything written there corrupts the protocol.
+    """
+    logging.basicConfig(
+        level=log_level.upper(),
+        format="%(asctime)s  %(levelname)-7s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+
+    server = build_server()
+    logger.info("st3ggmcp stdio server starting")
+    logger.info("tools: %s", ", ".join(TOOL_EXECUTORS.keys()))
+
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options(),
+        )
+
+
+def main_stdio() -> None:
+    """Entry point for `stegg-mcp-stdio`.
+
+    Small argument surface -- stdio clients typically launch the process
+    directly and don't pass configuration. Log level is the one useful knob.
+    """
+    parser = argparse.ArgumentParser(description="ST3GG MCP stdio server")
+    parser.add_argument("--log-level", default="info", help="log level for stderr (default info)")
+    args = parser.parse_args()
+    asyncio.run(_run_stdio(log_level=args.log_level))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ST3GG MCP HTTP server")
     parser.add_argument("--host", default="0.0.0.0", help="Bind host (default 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8765, help="Bind port (default 8765)")
     parser.add_argument("--log-level", default="info", help="uvicorn/log level")
+    parser.add_argument(
+        "--stdio",
+        action="store_true",
+        help="Run in stdio mode instead of HTTP (equivalent to stegg-mcp-stdio).",
+    )
     args = parser.parse_args()
+
+    if args.stdio:
+        asyncio.run(_run_stdio(log_level=args.log_level))
+        return
 
     logging.basicConfig(
         level=args.log_level.upper(),
