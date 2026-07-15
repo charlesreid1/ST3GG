@@ -860,6 +860,158 @@ async def execute_dct_capacity(
 
 
 # ---------------------------------------------------------------------------
+# stegg_lsb_capacity
+# ---------------------------------------------------------------------------
+async def execute_lsb_capacity(
+    path: str,
+    channels: str = "RGB",
+    bits_per_channel: int = 1,
+    strategy: str = "interleaved",
+    **_kw,
+) -> str:
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+
+    channels = channels.upper()
+    if channels not in CHANNEL_PRESETS:
+        return f"Unknown channels preset '{channels}'. Try: {', '.join(sorted(CHANNEL_PRESETS))}"
+    try:
+        bits = int(bits_per_channel)
+    except (TypeError, ValueError):
+        return "stegg_lsb_capacity error: 'bits_per_channel' must be an integer"
+    if not (1 <= bits <= 8):
+        return "bits_per_channel must be in 1..8"
+
+    def work():
+        img = Image.open(io.BytesIO(data))
+        cfg = steg_core.create_config(channels=channels, bits=bits, strategy=strategy)
+        cap = steg_core.calculate_capacity(img, cfg)
+        return {
+            "size": list(img.size),
+            "mode": img.mode,
+            "channels": channels,
+            "bits_per_channel": bits,
+            "strategy": strategy,
+            **cap,
+        }
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_lsb_capacity timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("lsb_capacity failed")
+        return f"stegg_lsb_capacity error: {exc}"
+    return truncate_json(result)
+
+
+# ---------------------------------------------------------------------------
+# stegg_analyze_image
+# ---------------------------------------------------------------------------
+async def execute_analyze_image(path: str, **_kw) -> str:
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+
+    def work():
+        img = Image.open(io.BytesIO(data))
+        return steg_core.analyze_image(img)
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_analyze_image timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("analyze_image failed")
+        return f"stegg_analyze_image error: {exc}"
+    return truncate_json(result)
+
+
+# ---------------------------------------------------------------------------
+# stegg_detect_pvd
+# ---------------------------------------------------------------------------
+async def execute_detect_pvd(path: str, **_kw) -> str:
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+
+    def work():
+        return at.detect_pvd_steg(data)
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_detect_pvd timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("detect_pvd failed")
+        return f"stegg_detect_pvd error: {exc}"
+    return truncate_json(result)
+
+
+# ---------------------------------------------------------------------------
+# stegg_inject_exif
+# ---------------------------------------------------------------------------
+async def execute_inject_exif(
+    path: str,
+    metadata: dict[str, str],
+    output_path: str | None = None,
+    **_kw,
+) -> str:
+    """Inject multiple key/value pairs as PNG tEXt chunks via PIL's PngInfo.
+
+    Complements stegg_encode_metadata (one chunk per call) when you want to
+    bulk-write several key/value pairs atomically.
+    """
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+
+    if not isinstance(metadata, dict) or not metadata:
+        return "stegg_inject_exif error: 'metadata' must be a non-empty object"
+    for k, v in metadata.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            return "stegg_inject_exif error: all metadata keys and values must be strings"
+
+    def work():
+        img = Image.open(io.BytesIO(data))
+        _, png_bytes = injector.inject_metadata_pil(img, metadata)
+        return {
+            "encoded_bytes": png_bytes,
+            "keys": sorted(metadata.keys()),
+            "size": list(img.size),
+            "mode": img.mode,
+        }
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_inject_exif timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("inject_exif failed")
+        return f"stegg_inject_exif error: {exc}"
+
+    out_path = output_path or default_output_path(meta)
+    try:
+        Path(out_path).write_bytes(result["encoded_bytes"])
+    except Exception as exc:
+        return f"stegg_inject_exif: failed to write {out_path}: {exc}"
+
+    summary = {
+        "output_path": str(Path(out_path).resolve()),
+        "output_bytes": len(result["encoded_bytes"]),
+        "keys": result["keys"],
+        "size": result["size"],
+        "mode": result["mode"],
+        "text": (
+            f"injected {len(result['keys'])} metadata key(s) into a {result['size']} {result['mode']} "
+            f"PNG via PIL PngInfo. wrote {out_path}."
+        ),
+    }
+    return truncate_json(summary)
+
+
+# ---------------------------------------------------------------------------
 # Registry: colocated executors + schemas
 # ---------------------------------------------------------------------------
 EXECUTORS = {
@@ -877,6 +1029,10 @@ EXECUTORS = {
     "stegg_dct_encode": execute_dct_encode,
     "stegg_dct_decode": execute_dct_decode,
     "stegg_dct_capacity": execute_dct_capacity,
+    "stegg_lsb_capacity": execute_lsb_capacity,
+    "stegg_analyze_image": execute_analyze_image,
+    "stegg_detect_pvd": execute_detect_pvd,
+    "stegg_inject_exif": execute_inject_exif,
 }
 
 
@@ -1110,6 +1266,70 @@ SCHEMAS = {
                 "block_size": {"type": "integer", "description": "DCT block size (default 8)."},
             },
             "required": ["path"],
+        },
+    },
+    "stegg_lsb_capacity": {
+        "description": (
+            "Pre-flight: how many payload bytes fit under an LSB configuration "
+            "(channels + bits_per_channel + strategy). Matches the recipe accepted "
+            "by stegg_encode_manual and stegg_decode_manual."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "channels": {"type": "string", "description": "R, G, B, A, RGB, RGBA, RG, RB, GB. Default RGB."},
+                "bits_per_channel": {"type": "integer", "description": "1-8. Default 1."},
+                "strategy": {"type": "string", "description": "sequential, interleaved (default), spread, randomized."},
+            },
+            "required": ["path"],
+        },
+    },
+    "stegg_analyze_image": {
+        "description": (
+            "Full statistical diagnostic on an image: per-channel mean/std/min/max, "
+            "LSB ratios, chi-square + smoothness indicators, capacity table across "
+            "common channel/bit combinations, and a HIGH/MEDIUM/LOW detection verdict. "
+            "Complements stegg_triage (which composes structural + statistical probes "
+            "into a single verdict) with a numbers-dense per-channel readout."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    "stegg_detect_pvd": {
+        "description": (
+            "PVD-specific detector: reports whether the image looks like it carries "
+            "a PVD payload (checks the length-header sanity from the pair diffs). "
+            "Pairs with stegg_pvd_encode/decode/capacity."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    "stegg_inject_exif": {
+        "description": (
+            "Inject multiple PNG tEXt key/value pairs in one shot via PIL's PngInfo. "
+            "Use this when you want to write several metadata entries atomically; use "
+            "stegg_encode_metadata when you want a single chunk (including iTXt/zTXt "
+            "or private chunks)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "metadata": {
+                    "type": "object",
+                    "description": "Map of tEXt keyword -> value string. All keys and values must be strings.",
+                    "additionalProperties": {"type": "string"},
+                },
+                "output_path": {"type": "string", "description": "Where to write the modified PNG."},
+            },
+            "required": ["path", "metadata"],
         },
     },
 }
