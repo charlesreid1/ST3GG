@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from steg_core import (
+from img_core import (
     CHANNEL_PRESETS,
     create_config,
     decode,
@@ -28,7 +28,7 @@ PAYLOAD_TEXT = b"round-trip probe: preset+bits sweep across the encoder"
 
 def _capacity_ok(carrier, config, payload: bytes) -> bool:
     """Cheap capacity gate — skip combos where the payload can't fit."""
-    from steg_core import calculate_capacity
+    from img_core import calculate_capacity
     cap = calculate_capacity(carrier, config)
     return cap["bytes_total"] >= len(payload) + 128
 

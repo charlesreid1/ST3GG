@@ -1,6 +1,6 @@
 """Pipeline #4 — Injector stack: one PNG carrying three layers of steg.
 
-  1. LSB in RGB channels (steg_core payload)
+  1. LSB in RGB channels (img_core payload)
   2. tEXt chunk with jailbreak template (injector)
   3. Trailing data after IEND
 
@@ -15,7 +15,7 @@ import pytest
 from PIL import Image
 
 from injector import extract_text_chunks, inject_text_chunk
-from steg_core import create_config, decode, encode
+from img_core import create_config, decode, encode
 
 pytestmark = pytest.mark.pipeline
 

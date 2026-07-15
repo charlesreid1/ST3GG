@@ -78,10 +78,10 @@ except Exception as e:
     print(f"  [!!] PIL import error: {e}")
 
 try:
-    from steg_core import analyze_image, detect_encoding, StegConfig, Channel
-    print("  [OK] steg_core imported")
+    from img_core import analyze_image, detect_encoding, StegConfig, Channel
+    print("  [OK] img_core imported")
 except Exception as e:
-    print(f"  [!!] steg_core import error: {e}")
+    print(f"  [!!] img_core import error: {e}")
     detect_encoding = None
 
 print()
@@ -96,7 +96,7 @@ print("-" * 70)
 # 1a. LSB RGB PNG with STEG v3 header
 try:
     if detect_encoding is None:
-        record("example_lsb_rgb.png [STEG detect]", "WARN", "steg_core not fully imported")
+        record("example_lsb_rgb.png [STEG detect]", "WARN", "img_core not fully imported")
     else:
         img = Image.open(EXAMPLES_DIR / 'example_lsb_rgb.png')
         enc = detect_encoding(img)

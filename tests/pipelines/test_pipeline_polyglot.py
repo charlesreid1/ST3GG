@@ -4,7 +4,7 @@
       + <ZIP archive appended after IEND>
       = polyglot bytes
 
-Both decoders (steg_core.decode + zipfile) must see their halves.
+Both decoders (img_core.decode + zipfile) must see their halves.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import zipfile
 import pytest
 from PIL import Image
 
-from steg_core import create_config, decode, encode
+from img_core import create_config, decode, encode
 
 pytestmark = pytest.mark.pipeline
 
@@ -49,7 +49,7 @@ def test_polyglot_png_zip_both_readable(medium_carrier, pipelines_dir):
     out_path = pipelines_dir / "pipeline_polyglot.png"
     out_path.write_bytes(polyglot)
 
-    # 4a. LSB half readable via steg_core.decode(). PIL happily ignores
+    # 4a. LSB half readable via img_core.decode(). PIL happily ignores
     #     the trailing junk after IEND.
     img_from_polyglot = Image.open(io.BytesIO(polyglot))
     assert decode(img_from_polyglot, config) == LSB_SECRET

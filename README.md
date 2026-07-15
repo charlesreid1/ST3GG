@@ -153,7 +153,7 @@ The next frontier of steganography is **agent-to-agent covert communication** an
 **Use ST3GG as a Python library in your agent pipeline:**
 
 ```python
-from steg_core import encode, decode, detect_encoding, StegConfig, get_channel_preset
+from img_core import encode, decode, detect_encoding, StegConfig, get_channel_preset
 from analysis_tools import detect_unicode_steg, detect_file_type, TOOL_REGISTRY
 from PIL import Image
 
@@ -394,7 +394,7 @@ See [`examples/README.md`](examples/README.md) for the full catalog.
 ```
 ST3GG/
 ├── index.html              # Browser UI (100% client-side)
-├── steg_core.py            # Core LSB encoding/decoding engine
+├── img_core.py            # Core LSB encoding/decoding engine
 ├── crypto.py               # AES-256-GCM + XOR encryption
 ├── analysis_tools.py       # 20+ detection & analysis functions
 ├── cli.py                  # Command-line interface

@@ -16,7 +16,7 @@ from analysis_tools import (
     png_detect_appended_data,
     png_extract_text_chunks,
 )
-from steg_core import decode, detect_encoding
+from img_core import decode, detect_encoding
 
 
 # ---------- STEG v3 header PNG ----------

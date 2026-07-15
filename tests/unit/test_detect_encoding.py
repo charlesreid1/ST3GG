@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from steg_core import (
+from img_core import (
     create_config,
     detect_encoding,
     encode,

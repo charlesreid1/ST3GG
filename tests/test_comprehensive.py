@@ -26,7 +26,7 @@ for m in list(sys.modules.keys()):
 from pathlib import Path
 from PIL import Image
 import numpy as np
-from steg_core import (StegConfig, Channel, get_channel_preset, encode, decode,
+from img_core import (StegConfig, Channel, get_channel_preset, encode, decode,
                        detect_encoding, calculate_capacity)
 from analysis_tools import (
     TOOL_REGISTRY, detect_file_type,

@@ -24,7 +24,7 @@ from PIL import Image
 import asyncio
 
 # Import our modules
-from steg_core import (
+from img_core import (
     encode, decode, create_config, calculate_capacity, analyze_image,
     CHANNEL_PRESETS
 )

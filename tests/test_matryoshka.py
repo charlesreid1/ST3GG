@@ -23,7 +23,7 @@ import numpy as np
 # handles the same path insertion for the discovered case.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from steg_core import encode, decode, create_config, calculate_capacity
+from img_core import encode, decode, create_config, calculate_capacity
 
 # Try to import crypto, but make it optional for testing
 try:
@@ -134,7 +134,7 @@ def matryoshka_encode(payload: bytes, carriers: list, config=None, password: str
         raise ValueError("At least one carrier image is required")
 
     if config is None:
-        # Use default config that matches steg_core's decode auto-detect
+        # Use default config that matches img_core's decode auto-detect
         config = create_config(channels='RGB', bits=1)
 
     layer_info = []

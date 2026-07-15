@@ -32,7 +32,7 @@ from rich import box
 from PIL import Image
 
 # Import our modules
-from steg_core import (
+from img_core import (
     encode, decode, create_config, calculate_capacity, analyze_image,
     detect_encoding, CHANNEL_PRESETS, EncodingStrategy,
     dct_encode, dct_decode, dct_capacity, DCT_STRENGTHS,

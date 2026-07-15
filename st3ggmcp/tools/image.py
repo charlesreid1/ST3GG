@@ -12,8 +12,7 @@ from PIL import Image
 
 import analysis_tools as at
 import injector
-import pvd_core
-import steg_core
+import img_core
 
 from ._common import (
     CHANNEL_PRESETS,
@@ -82,7 +81,7 @@ async def execute_lsb_smart_scan(path: str, max_bytes: int = 4096, **_kw) -> str
 
     def work():
         img = Image.open(io.BytesIO(data))
-        result = steg_core.smart_extract(img, max_bytes=int(max_bytes))
+        result = img_core.smart_extract(img, max_bytes=int(max_bytes))
         if not result:
             return {"found": False}
 
@@ -192,13 +191,13 @@ async def execute_decode_manual(
 
     def work():
         img = Image.open(io.BytesIO(data))
-        config = steg_core.create_config(
+        config = img_core.create_config(
             channels=channels,
             bits=int(bits_per_channel),
             strategy=strategy,
         )
         try:
-            payload = steg_core.decode(img, config=config)
+            payload = img_core.decode(img, config=config)
         except Exception as exc:
             return {"decoded": False, "error": str(exc)}
 
@@ -363,14 +362,14 @@ async def execute_encode_manual(
 
     def work():
         img = Image.open(io.BytesIO(data))
-        cfg = steg_core.create_config(
+        cfg = img_core.create_config(
             channels=ch_upper,
             bits=bits,
             strategy=strategy,
             seed=(int(seed) if seed is not None else None),
             compress=bool(compress),
         )
-        cap = steg_core.calculate_capacity(img, cfg)
+        cap = img_core.calculate_capacity(img, cfg)
         usable = int(cap.get("usable_bytes") or 0)
         if len(payload) > usable and not compress:
             return {"__err__": (
@@ -378,7 +377,7 @@ async def execute_encode_manual(
                 f"{usable} usable bytes for channels={ch_upper}, bits={bits}, "
                 f"strategy={strategy}."
             )}
-        encoded_img = steg_core.encode(img, payload, config=cfg)
+        encoded_img = img_core.encode(img, payload, config=cfg)
         buf = io.BytesIO()
         encoded_img.save(buf, format="PNG")
         return {
@@ -517,7 +516,7 @@ async def execute_encode_metadata(
 # ---------------------------------------------------------------------------
 # stegg_pvd_encode / stegg_pvd_decode / stegg_pvd_capacity
 # ---------------------------------------------------------------------------
-_PVD_RANGE_TYPES = tuple(pvd_core.PVD_RANGES.keys())
+_PVD_RANGE_TYPES = tuple(img_core.PVD_RANGES.keys())
 _PVD_DIRECTIONS = ("horizontal", "vertical", "both")
 
 
@@ -543,14 +542,14 @@ async def execute_pvd_capacity(
 
     def work():
         img = Image.open(io.BytesIO(data))
-        bits = pvd_core.capacity_bits(img, direction=direction, range_type=range_type)
+        bits = img_core.pvd_capacity_bits(img, direction=direction, range_type=range_type)
         return {
             "size": list(img.size),
             "mode": img.mode,
             "direction": direction,
             "range_type": range_type,
             "capacity_bits": bits,
-            "capacity_bytes": pvd_core.capacity_bytes(img, direction=direction, range_type=range_type),
+            "capacity_bytes": img_core.pvd_capacity_bytes(img, direction=direction, range_type=range_type),
         }
 
     try:
@@ -583,14 +582,14 @@ async def execute_pvd_encode(
 
     def work():
         img = Image.open(io.BytesIO(data))
-        cap = pvd_core.capacity_bytes(img, direction=direction, range_type=range_type)
+        cap = img_core.pvd_capacity_bytes(img, direction=direction, range_type=range_type)
         if len(payload) > cap:
             return {"__err__": (
                 f"payload is {len(payload)} bytes but PVD carrier has only "
                 f"{cap} usable bytes for direction={direction}, range_type={range_type}."
             )}
         try:
-            encoded_img = pvd_core.encode(img, payload, direction=direction, range_type=range_type)
+            encoded_img = img_core.pvd_encode(img, payload, direction=direction, range_type=range_type)
         except ValueError as exc:
             return {"__err__": str(exc)}
         buf = io.BytesIO()
@@ -663,7 +662,7 @@ async def execute_pvd_decode(
     def work():
         img = Image.open(io.BytesIO(data))
         try:
-            payload = pvd_core.decode(
+            payload = img_core.pvd_decode(
                 img,
                 direction=direction,
                 range_type=range_type,
@@ -730,14 +729,14 @@ async def execute_dct_encode(
 
     def work():
         img = Image.open(io.BytesIO(data))
-        cap = steg_core.dct_capacity(img, block_size=bs)
+        cap = img_core.dct_capacity(img, block_size=bs)
         usable = int(cap["usable_bytes"])
         if len(payload) > usable:
             return {"__err__": (
                 f"payload is {len(payload)} bytes but DCT carrier has only "
                 f"{usable} usable bytes (block_size={bs})."
             )}
-        encoded_img = steg_core.dct_encode(
+        encoded_img = img_core.dct_encode(
             img, payload, robustness=robustness, block_size=bs
         )
         buf = io.BytesIO()
@@ -808,7 +807,7 @@ async def execute_dct_decode(
     def work():
         img = Image.open(io.BytesIO(data))
         try:
-            payload = steg_core.dct_decode(img, block_size=bs)
+            payload = img_core.dct_decode(img, block_size=bs)
         except Exception as exc:
             return {"decoded": False, "error": str(exc)}
         out: dict[str, Any] = {"decoded": True, "length": len(payload)}
@@ -847,7 +846,7 @@ async def execute_dct_capacity(
 
     def work():
         img = Image.open(io.BytesIO(data))
-        return steg_core.dct_capacity(img, block_size=bs)
+        return img_core.dct_capacity(img, block_size=bs)
 
     try:
         report = await run_sync(work)
@@ -885,8 +884,8 @@ async def execute_lsb_capacity(
 
     def work():
         img = Image.open(io.BytesIO(data))
-        cfg = steg_core.create_config(channels=channels, bits=bits, strategy=strategy)
-        cap = steg_core.calculate_capacity(img, cfg)
+        cfg = img_core.create_config(channels=channels, bits=bits, strategy=strategy)
+        cap = img_core.calculate_capacity(img, cfg)
         return {
             "size": list(img.size),
             "mode": img.mode,
@@ -916,7 +915,7 @@ async def execute_analyze_image(path: str, **_kw) -> str:
 
     def work():
         img = Image.open(io.BytesIO(data))
-        return steg_core.analyze_image(img)
+        return img_core.analyze_image(img)
 
     try:
         result = await run_sync(work)
