@@ -2267,7 +2267,11 @@ def audio_lsb_decode(data: bytes) -> Dict[str, Any]:
 # ============== PCAP / NETWORK PROTOCOL DECODERS ==============
 
 def pcap_decode(data: bytes) -> Dict[str, Any]:
-    """Parse PCAP and extract steganographic data from protocol fields."""
+    """Parse PCAP and extract steganographic data from protocol fields.
+
+    Uses both the legacy raw-packet scanner and (if available) the new
+    network_core structured decoder for NETH-framed payloads.
+    """
     results = {'found': False, 'findings': [], 'packets': 0, 'methods': {}}
     if len(data) < 24:
         return results
@@ -2286,7 +2290,6 @@ def pcap_decode(data: bytes) -> Dict[str, Any]:
     urg_bytes = bytearray()
     payloads = bytearray()
     timestamps = []
-    import base64, re as _re
 
     while pos + 16 <= len(data):
         ts_sec = struct.unpack(f'{endian}I', data[pos:pos+4])[0]
@@ -2327,8 +2330,9 @@ def pcap_decode(data: bytes) -> Dict[str, Any]:
                 return
         except: pass
         try:
+            import base64
             text = raw.decode('ascii', errors='ignore')
-            for m in _re.finditer(r'[A-Za-z0-9+/]{16,}={0,2}', text):
+            for m in re.finditer(r'[A-Za-z0-9+/]{16,}={0,2}', text):
                 d = base64.b64decode(m.group()).decode('utf-8', errors='strict')
                 if len(d) > 4:
                     results['methods'][name + '_b64'] = {'message': d[:200]}
@@ -2337,6 +2341,7 @@ def pcap_decode(data: bytes) -> Dict[str, Any]:
                     return
         except: pass
         try:
+            import base64
             clean = ''.join(c for c in raw.decode('ascii', errors='ignore').upper()
                           if c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567')
             if len(clean) > 10:
@@ -2353,7 +2358,7 @@ def pcap_decode(data: bytes) -> Dict[str, Any]:
     if win_bytes: try_decode(bytes(win_bytes), 'tcp_window')
     if urg_bytes: try_decode(bytes(urg_bytes), 'tcp_urgent')
 
-    # Covert timing
+    # Covert timing (legacy heuristic)
     if len(timestamps) > 16:
         delays = [timestamps[i+1] - timestamps[i] for i in range(len(timestamps)-1)]
         median = sorted(delays)[len(delays)//2]
@@ -2377,8 +2382,124 @@ def pcap_decode(data: bytes) -> Dict[str, Any]:
         results['findings'].append('HTTP traffic detected')
         results['found'] = True
 
+    # Also try network_core structured decoder for NETH-framed payloads
+    try:
+        from network_core import decode_neth_framed_payload
+        nc_result = decode_neth_framed_payload(data)
+        if nc_result.get('found'):
+            payload = nc_result.get('payload', b'')
+            method = nc_result.get('method', 'unknown')
+            try:
+                text = payload.decode('utf-8', errors='replace')
+                results['methods'][f'neth_{method}'] = {
+                    'message': text[:200],
+                    'payload_length': len(payload),
+                }
+                results['found'] = True
+                results['findings'].append(
+                    f'NETH/{method} ({len(payload)} bytes): {text[:60]}'
+                )
+            except Exception:
+                results['methods'][f'neth_{method}'] = {
+                    'hex': payload[:100].hex(),
+                    'payload_length': len(payload),
+                }
+                results['found'] = True
+    except ImportError:
+        pass
+
     results['suspicious'] = results['found']
     return results
+
+
+# ============== PER-METHOD NETWORK DECODERS ==============
+#
+# Each function follows the ``tool(data: bytes) -> dict`` pattern and
+# delegates to network_core.decode() with an explicit method.  These are
+# automatically reachable via ``stegg-cli analysis-tool <file> <name>``.
+
+
+def _pcap_decode_method(data: bytes, method_name: str, method_value) -> Dict[str, Any]:
+    """Shared implementation for per-method PCAP decoders."""
+    try:
+        from network_core import decode
+    except ImportError:
+        return {'found': False, 'error': 'network_core not available'}
+    try:
+        result = decode(data, method=method_value)
+        if result.get('found'):
+            payload = result['payload']
+            try:
+                text = payload.decode('utf-8', errors='replace')
+            except Exception:
+                text = payload.hex()
+            return {
+                'found': True,
+                'method': method_name,
+                'payload': text[:2000],
+                'payload_length': len(payload),
+                'packets': result.get('packets', 0),
+                'findings': [f'{method_name}: {text[:80]}'],
+                'suspicious': True,
+            }
+        return {'found': False, 'reason': 'No NETH-framed payload found'}
+    except Exception as e:
+        return {'found': False, 'error': str(e)}
+
+
+def pcap_decode_ip_ttl(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'ip_ttl', StegoMethod.IP_TTL)
+
+
+def pcap_decode_ip_id(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'ip_id', StegoMethod.IP_ID)
+
+
+def pcap_decode_tcp_isn(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'tcp_isn', StegoMethod.TCP_ISN)
+
+
+def pcap_decode_tcp_timestamp(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'tcp_timestamp', StegoMethod.TCP_TIMESTAMP)
+
+
+def pcap_decode_tcp_window(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'tcp_window', StegoMethod.TCP_WINDOW)
+
+
+def pcap_decode_tcp_urgent(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'tcp_urgent', StegoMethod.TCP_URGENT)
+
+
+def pcap_decode_icmp_payload(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'icmp_payload', StegoMethod.ICMP_PAYLOAD)
+
+
+def pcap_decode_dns_label(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'dns_label', StegoMethod.DNS_LABEL)
+
+
+def pcap_decode_dns_txt(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'dns_txt', StegoMethod.DNS_TXT)
+
+
+def pcap_decode_http_header(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'http_header', StegoMethod.HTTP_HEADER)
+
+
+def pcap_decode_covert_timing(data: bytes) -> Dict[str, Any]:
+    from network_core import StegoMethod
+    return _pcap_decode_method(data, 'covert_timing', StegoMethod.COVERT_TIMING)
 
 
 # ============== ARCHIVE DECODERS ==============
@@ -2860,6 +2981,17 @@ def _register_all_tools():
     TOOL_REGISTRY.register('sample_pairs_analysis', sample_pairs_analysis)
     TOOL_REGISTRY.register('audio_lsb_decode', audio_lsb_decode)
     TOOL_REGISTRY.register('pcap_decode', pcap_decode)
+    TOOL_REGISTRY.register('pcap_decode_ip_ttl', pcap_decode_ip_ttl)
+    TOOL_REGISTRY.register('pcap_decode_ip_id', pcap_decode_ip_id)
+    TOOL_REGISTRY.register('pcap_decode_tcp_isn', pcap_decode_tcp_isn)
+    TOOL_REGISTRY.register('pcap_decode_tcp_timestamp', pcap_decode_tcp_timestamp)
+    TOOL_REGISTRY.register('pcap_decode_tcp_window', pcap_decode_tcp_window)
+    TOOL_REGISTRY.register('pcap_decode_tcp_urgent', pcap_decode_tcp_urgent)
+    TOOL_REGISTRY.register('pcap_decode_icmp_payload', pcap_decode_icmp_payload)
+    TOOL_REGISTRY.register('pcap_decode_dns_label', pcap_decode_dns_label)
+    TOOL_REGISTRY.register('pcap_decode_dns_txt', pcap_decode_dns_txt)
+    TOOL_REGISTRY.register('pcap_decode_http_header', pcap_decode_http_header)
+    TOOL_REGISTRY.register('pcap_decode_covert_timing', pcap_decode_covert_timing)
     TOOL_REGISTRY.register('zip_decode', zip_decode)
     TOOL_REGISTRY.register('tar_decode', tar_decode)
     TOOL_REGISTRY.register('gzip_decode', gzip_decode)

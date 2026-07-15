@@ -7,7 +7,7 @@ means editing exactly one submodule.
 
 from __future__ import annotations
 
-from . import image, meta, text, triage
+from . import image, meta, network, text, triage
 
 # Re-export individual executors so callers can still do
 #   `from st3ggmcp.tools import execute_text_encode`
@@ -26,6 +26,11 @@ from .image import (  # noqa: F401
     execute_read_png_chunks,
 )
 from .meta import execute_list_techniques  # noqa: F401
+from .network import (  # noqa: F401
+    execute_network_decode,
+    execute_network_encode,
+    execute_network_methods,
+)
 from .text import (  # noqa: F401
     execute_text_capacity,
     execute_text_decode,
@@ -35,7 +40,7 @@ from .text import (  # noqa: F401
 )
 from .triage import execute_triage  # noqa: F401
 
-_MODULES = (image, triage, text, meta)
+_MODULES = (image, triage, text, meta, network)
 
 TOOL_EXECUTORS: dict = {}
 TOOL_SCHEMAS: dict = {}
