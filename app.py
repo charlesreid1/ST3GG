@@ -19,12 +19,16 @@ from img_core import (
 from crypto import (
     encrypt, decrypt, get_available_methods, crypto_status, HAS_CRYPTO
 )
-from injector import (
-    generate_injection_filename, get_template_names, get_template_info,
+from jailbreak_core import (
+    generate_injection_filename,
+    get_filename_template_names as get_template_names,
+    get_filename_template_info as get_template_info,
     get_jailbreak_template, get_jailbreak_names,
+    create_full_injection_package, JAILBREAK_TEMPLATES,
+)
+from injector import (
     inject_metadata_pil, inject_text_chunk, read_png_chunks,
-    zalgo_text, leetspeak, create_full_injection_package,
-    JAILBREAK_TEMPLATES
+    zalgo_text, leetspeak,
 )
 
 # Page config
