@@ -82,7 +82,7 @@ Documentation = "https://github.com/elder-plinius/st3gg#readme"
 Issues = "https://github.com/elder-plinius/st3gg/issues"
 
 [tool.setuptools]
-py-modules = ["img_core", "crypto", "analysis_tools", "text_core", "network_core", "cli", "tui", "webui", "app", "injector", "ascii_art", "stegg_cli"]
+py-modules = ["img_core", "crypto", "analysis_tools", "text_core", "network_core", "jailbreak_core", "cli", "tui", "webui", "app", "injector", "ascii_art", "stegg_cli"]
 packages = ["st3ggmcp"]
 
 [tool.setuptools.package-data]
