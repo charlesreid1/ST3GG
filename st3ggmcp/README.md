@@ -1,6 +1,6 @@
 # st3ggmcp
 
-MCP server exposing the ST3GG steganography toolset over HTTP.
+MCP server exposing the ST3GG steganography toolset over HTTP or stdio.
 
 Covers three carrier families as equal peers — **image**, **text**, **emoji** — plus general steganography advice (persona answers general-craft questions from knowledge; a file is not required).
 
@@ -14,20 +14,40 @@ pip install -e '.[mcp]'
 
 ## Run
 
+Two transports, same tool surface:
+
+**HTTP** — long-running server, one process serves many clients. Meant for container-to-container use.
+
 ```bash
 stegg-mcp                    # defaults: 0.0.0.0:8765, endpoint /mcp
 stegg-mcp --port 9000
+python -m st3ggmcp.server    # same
 ```
 
-Or:
+**stdio** — the client (Claude Code, etc.) launches the process on demand. JSON-RPC over stdin/stdout, logs on stderr. Nothing to keep running.
 
 ```bash
-python -m st3ggmcp.server
+stegg-mcp-stdio              # or: stegg-mcp --stdio
+python -m st3ggmcp.server --stdio
 ```
 
 ## Client config
 
-Point any MCP client (Claude Code, opencode) at `http://<host>:8765/mcp` as an HTTP MCP server. The server is stateless.
+**HTTP.** Point any MCP client at `http://<host>:8765/mcp`. The server is stateless.
+
+**stdio (Claude Code).** Add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "st3gg": {
+      "command": "stegg-mcp-stdio"
+    }
+  }
+}
+```
+
+Claude Code launches the process when it needs it and shuts it down on exit. If `stegg-mcp-stdio` isn't on your PATH, use the full path or `["python", "-m", "st3ggmcp.server", "--stdio"]`.
 
 ## Tools
 

@@ -72,6 +72,7 @@ stegg-tui = "tui:main"
 stegg-web = "webui:main"
 stegg-cli = "stegg_cli:main"
 stegg-mcp = "st3ggmcp.server:main"
+stegg-mcp-stdio = "st3ggmcp.server:main_stdio"
 
 [project.urls]
 Homepage = "https://ste.gg"
