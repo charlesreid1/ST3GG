@@ -253,11 +253,11 @@ INJECTION_FILENAME_TEMPLATES: Dict[str, InjectionFilenameTemplate] = {
 INJECTION_TEMPLATES = INJECTION_FILENAME_TEMPLATES
 
 
-def _generate_random(pattern: str) -> str:
-    """Generate a digit string from a `randN` pattern."""
+def _generate_random(pattern: str, rng: random.Random) -> str:
+    """Generate a digit string from a `randN` pattern using `rng`."""
     m = re.match(r"rand(\d+)", pattern)
     if m:
-        return "".join(random.choices(string.digits, k=int(m.group(1))))
+        return "".join(rng.choices(string.digits, k=int(m.group(1))))
     return pattern
 
 
@@ -266,8 +266,15 @@ def generate_injection_filename(
     channels: str = "RGB",
     custom_template: Optional[str] = None,
     extension: str = ".png",
+    seed: Optional[int] = None,
 ) -> str:
-    """Generate an injection filename from a template."""
+    """Generate an injection filename from a template.
+
+    When `seed` is provided, digit substitutions are drawn from a seeded RNG,
+    so the same seed always produces the same filename. This is what lets
+    committed showcase artifacts keep their long injection-payload names
+    without changing on every test run.
+    """
     if template_name == "custom" and custom_template:
         template_str = custom_template
     else:
@@ -276,17 +283,19 @@ def generate_injection_filename(
         )
         template_str = tmpl.template
 
+    rng = random.Random(seed) if seed is not None else random.Random()
+
     result = template_str
     result = result.replace("{channels}", channels)
     result = result.replace("{custom}", custom_template or "")
 
     for match in re.finditer(r"\{(rand\d+)\}", result):
-        result = result.replace(match.group(0), _generate_random(match.group(1)))
+        result = result.replace(match.group(0), _generate_random(match.group(1), rng))
 
     # Also handle bare rand patterns (backward compat)
     for match in re.finditer(r"_(rand\d+)(?=_|$)", template_str):
         old = match.group(1)
-        result = result.replace(old, _generate_random(old))
+        result = result.replace(old, _generate_random(old, rng))
 
     result = re.sub(r"[^\w\-_.]", "_", result)
     if not result.endswith(extension):
@@ -347,6 +356,7 @@ def compose_image_jailbreak(
     encrypt: bool = False,
     password: Optional[str] = None,
     trailing_payload: Optional[bytes] = None,
+    filename_seed: Optional[int] = None,
 ) -> JailbreakPayload:
     """Create a full image-based jailbreak package in one call."""
     from img_core import create_config, encode  # local import to avoid cycles
@@ -382,7 +392,9 @@ def compose_image_jailbreak(
     if trailing_payload:
         png_bytes = png_bytes + trailing_payload
 
-    filename = generate_injection_filename(filename_template, channels=channels)
+    filename = generate_injection_filename(
+        filename_template, channels=channels, seed=filename_seed
+    )
 
     return JailbreakPayload(
         text_content=body,
@@ -432,6 +444,7 @@ def compose_multimodal_jailbreak(
     *,
     filename_template: str = "chatgpt_decoder",
     channels: str = "RGB",
+    filename_seed: Optional[int] = None,
 ) -> JailbreakPayload:
     """Distribute a jailbreak across multiple carriers (image + text + filename)."""
     body = _template_body(jailbreak_template)
@@ -466,7 +479,9 @@ def compose_multimodal_jailbreak(
         else:
             raise TypeError(f"unsupported carrier type: {type(carrier).__name__}")
 
-    filename = generate_injection_filename(filename_template, channels=channels)
+    filename = generate_injection_filename(
+        filename_template, channels=channels, seed=filename_seed
+    )
 
     return JailbreakPayload(
         text_content=body,

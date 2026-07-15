@@ -60,6 +60,8 @@ def test_injector_stack(medium_carrier, pipelines_dir):
 
 def test_full_jailbreak_stack(medium_carrier, pipelines_dir):
     """Pipeline — jailbreak across all vectors via compose_image_jailbreak."""
+    # Fixed seed → the long injection-payload filename is stable across runs,
+    # so the committed showcase artifact keeps the same name.
     payload = compose_image_jailbreak(
         "pliny_classic",
         medium_carrier,
@@ -68,6 +70,7 @@ def test_full_jailbreak_stack(medium_carrier, pipelines_dir):
         filename_template="chatgpt_decoder",
         metadata_inject=True,
         trailing_payload=b"\n[trailing-jailbreak-marker]\n",
+        filename_seed=20260715,
     )
 
     out = pipelines_dir / payload.filename
