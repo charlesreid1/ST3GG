@@ -1,4 +1,4 @@
-"""Tests for the PVD (Pixel Value Differencing) core.
+"""Tests for the PVD (Pixel Value Differencing) block in img_core.
 
 Coverage:
   * Range-table lookup (bucket edges + fallback).
