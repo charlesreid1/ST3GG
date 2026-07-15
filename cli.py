@@ -15,7 +15,7 @@ import sys
 import time
 import typer
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from enum import Enum
 
 from rich.console import Console
@@ -52,6 +52,10 @@ from injector import (
 from ascii_art import (
     BANNER, BANNER_SMALL, STEGOSAURUS_ASCII_SIMPLE, STEGOSAURUS_SMALL,
     STATUS, FOOTER, TAGLINES, section_header, channel_bar, COLORS
+)
+from matryoshka_core import (
+    MatryoshkaConfig, encode_nested, decode_nested, capacity_for,
+    plan_nesting, is_image_data, DecodeLayer, LayerReport,
 )
 
 # Initialize
@@ -421,6 +425,8 @@ def decode_cmd(
 def analyze(
     input_image: Path = typer.Argument(..., help="Image to analyze"),
     full: bool = typer.Option(False, "--full", "-f", help="Full analysis with all channels"),
+    recursive: bool = typer.Option(False, "--recursive", "-r", "--matryoshka",
+                                   help="Recursively scan for Matryoshka nested stego"),
 ):
     """
     🔍 Analyze an image for steganographic content
@@ -531,7 +537,56 @@ def analyze(
         )
 
     console.print(verdict)
+
+    # Recursive / Matryoshka scan
+    if recursive:
+        console.print()
+        _run_recursive_scan(input_image)
+
     console.print(f"\n{FOOTER}")
+
+
+def _run_recursive_scan(image_path: Path):
+    """Run smart_scan_recursive on an image and print results."""
+    try:
+        from analysis_tools import smart_scan_recursive
+    except ImportError:
+        warning("analysis_tools.smart_scan_recursive not available")
+        return
+
+    with console.status("[magenta]🪆 Recursive Matryoshka scan...[/magenta]", spinner="dots"):
+        result = smart_scan_recursive(image_path.read_bytes())
+
+    if result.get("error"):
+        warning(f"Recursive scan failed: {result['error']}")
+        return
+
+    if not result.get("is_matryoshka"):
+        info("🪆 No nested stego layers detected")
+        return
+
+    depth = result["nested_depth"]
+    count = result["layers_found"]
+
+    table = Table(
+        title=f"🪆 Matryoshka Scan — {count} layers, max depth {depth}",
+        box=box.ROUNDED,
+    )
+    table.add_column("Depth", style="cyan", justify="right")
+    table.add_column("Type", style="magenta")
+    table.add_column("Size", style="green", justify="right")
+    table.add_column("Preview", style="white")
+
+    for layer in result["layers"]:
+        preview = layer["preview"][:80] if layer["preview"] else ""
+        table.add_row(
+            str(layer["depth"]),
+            layer["type"],
+            f"{layer['data_size']:,} B" if layer["data_size"] else "",
+            preview,
+        )
+
+    console.print(table)
 
 
 # ============== INJECT COMMAND ==============
@@ -837,6 +892,272 @@ def text_capacity_cmd(
     for k, v in rep.items():
         table.add_row(k, str(v))
     console.print(Panel(table, title=f"[cyan]capacity: {method}[/cyan]", border_style="cyan"))
+
+
+# ============== 🪆 MATRYOSHKA COMMANDS ==============
+
+matryoshka_app = typer.Typer(
+    name="matryoshka",
+    help="🪆 Matryoshka nested-image steganography (Russian nesting dolls)",
+    rich_markup_mode="rich",
+)
+app.add_typer(matryoshka_app)
+
+
+def _load_carriers(paths: List[Path]) -> List[Tuple[Image.Image, str]]:
+    """Load carrier images from paths. Returns innermost-first list."""
+    carriers = []
+    for p in paths:
+        if not p.exists():
+            error(f"Carrier image not found: {p}")
+            raise typer.Exit(1)
+        img = Image.open(p).convert("RGBA")
+        carriers.append((img, p.name))
+    # CLI accepts outermost-first; reverse to innermost-first
+    carriers.reverse()
+    return carriers
+
+
+def _print_layer_tree(layers: List[DecodeLayer], indent: int = 0):
+    """Pretty-print a nested decode layer tree."""
+    prefix = "  " * indent
+    for layer in layers:
+        type_icon = {
+            "steg_header": "📦",
+            "nested_image": "🪆",
+            "nested_image_raw": "🪆",
+            "file": "📁",
+            "text": "📝",
+            "binary": "⚫",
+            "no_data_found": "❌",
+            "max_depth_reached": "⚠️",
+            "error": "💥",
+        }.get(layer.type, "❓")
+
+        name_part = f" [{layer.filename}]" if layer.filename else ""
+        size_part = f" ({layer.data_size:,} B)" if layer.data_size else ""
+        print(f"{prefix}{type_icon} L{layer.depth} [{layer.type}]{name_part}{size_part}")
+        if layer.preview and layer.type not in ("nested_image", "nested_image_raw"):
+            preview_short = layer.preview[:120].replace("\n", " ")
+            print(f"{prefix}   {preview_short}")
+        if layer.nested:
+            _print_layer_tree(layer.nested, indent + 1)
+
+
+@matryoshka_app.command()
+def encode(
+    payload_path: Path = typer.Option(
+        ..., "--payload", "-p", help="File to hide (innermost secret)"
+    ),
+    carriers: List[Path] = typer.Option(
+        ..., "--carrier", "-c", help="Carrier image (outermost first; repeatable)"
+    ),
+    output: Path = typer.Option(
+        None, "--output", "-o", help="Output image path"
+    ),
+    password: Optional[str] = typer.Option(
+        None, "--password", "-w", help="Encryption password (innermost layer only)"
+    ),
+    channels: str = typer.Option(
+        "RGBA", "--channels", help="Channel preset (R, G, B, A, RGB, RGBA, etc.)"
+    ),
+    bits: int = typer.Option(
+        2, "--bits", "-b", help="Bits per channel (1-8)", min=1, max=8
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print capacity plan only, do not encode"
+    ),
+):
+    """
+    🪆 Encode a payload into a stack of carrier images.
+
+    Carriers are specified outermost-first (matching the mental model) and
+    reversed internally to innermost-first for the encoding engine.
+
+    Examples:
+        stegg matryoshka encode -p secret.txt -c inner.png -c outer.png -o nested.png
+        stegg matryoshka encode -p data.bin -c a.png -c b.png -c c.png --dry-run
+    """
+    if not carriers:
+        error("At least one --carrier is required")
+        raise typer.Exit(1)
+
+    if not payload_path.exists():
+        error(f"Payload file not found: {payload_path}")
+        raise typer.Exit(1)
+
+    payload = payload_path.read_bytes()
+    info(f"Payload: {payload_path} ({len(payload):,} bytes)")
+
+    carrier_tuples = _load_carriers(carriers)
+    info(f"Carriers: {len(carrier_tuples)} layers (outermost-first on CLI)")
+
+    config = MatryoshkaConfig(
+        channels=channels, bits=bits, password=password,
+        max_depth=max(len(carrier_tuples), 11),
+    )
+
+    if dry_run:
+        info("Dry-run mode — capacity plan only")
+        plan = plan_nesting(len(payload), carrier_tuples, config, mode="estimate")
+        _print_plan(plan)
+        return
+
+    try:
+        result_img, reports = encode_nested(payload, carrier_tuples, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1)
+
+    if output is None:
+        output = Path("matryoshka_encoded.png")
+
+    result_img.save(output, format="PNG")
+    success(f"Encoded {len(reports)} layers → {output}")
+    _print_plan(reports)
+
+
+def _print_plan(reports: List[LayerReport]):
+    """Print a capacity plan / layer report table."""
+    table = Table(title="🪆 Layer Plan", box=box.ROUNDED)
+    table.add_column("Layer", style="cyan", justify="right")
+    table.add_column("Carrier", style="magenta")
+    table.add_column("Capacity", style="green", justify="right")
+    table.add_column("Payload", style="yellow", justify="right")
+    table.add_column("Fits", justify="center")
+    table.add_column("Output", style="blue", justify="right")
+
+    for r in reports:
+        fits_icon = "✅" if r.fits else "❌"
+        output_str = _format_size_cli(r.output_size) if isinstance(r.output_size, int) else str(r.output_size)
+        table.add_row(
+            str(r.layer),
+            r.carrier_name,
+            _format_size_cli(r.capacity),
+            _format_size_cli(r.payload_size),
+            fits_icon,
+            output_str,
+        )
+    console.print(table)
+
+
+def _format_size_cli(size_bytes: int | str) -> str:
+    """Format bytes for CLI display."""
+    if isinstance(size_bytes, str):
+        return size_bytes
+    for unit in ["B", "KB", "MB", "GB"]:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
+
+
+@matryoshka_app.command()
+def decode(
+    image: Path = typer.Argument(..., help="Image to recursively decode"),
+    password: Optional[str] = typer.Option(
+        None, "--password", "-w", help="Decryption password"
+    ),
+    max_depth: int = typer.Option(
+        11, "--max-depth", "-d", help="Maximum recursion depth (1-11)", min=1, max=11
+    ),
+    extract_dir: Optional[Path] = typer.Option(
+        None, "--extract-dir", "-e", help="Write each layer's raw data to files"
+    ),
+):
+    """
+    🪆 Recursively decode a Matryoshka-encoded image.
+
+    Prints a depth-indented tree of discovered layers.  Use --extract-dir
+    to write each layer's raw data to disk.
+
+    Examples:
+        stegg matryoshka decode nested.png
+        stegg matryoshka decode nested.png -d 5 -e ./layers/
+    """
+    if not image.exists():
+        error(f"Image not found: {image}")
+        raise typer.Exit(1)
+
+    img = Image.open(image).convert("RGBA")
+    info(f"Decoding: {image} ({img.size[0]}x{img.size[1]})")
+
+    config = MatryoshkaConfig(max_depth=max_depth, password=password)
+    layers = decode_nested(img, config)
+
+    if not layers:
+        warning("No layers found")
+        return
+
+    print(f"\n🪆  Matryoshka decode — {image.name}")
+    _print_layer_tree(layers)
+
+    # Extract files if requested
+    if extract_dir:
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        _extract_layers(layers, extract_dir)
+
+
+def _extract_layers(layers: List[DecodeLayer], out_dir: Path, prefix: str = ""):
+    """Write DecodeLayer raw_data to disk."""
+    for layer in layers:
+        if layer.raw_data:
+            name = layer.filename or f"layer{layer.depth}.bin"
+            fname = f"{prefix}{name}"
+            out_path = out_dir / fname
+            out_path.write_bytes(layer.raw_data)
+            info(f"  Extracted: {out_path}")
+        if layer.nested:
+            _extract_layers(layer.nested, out_dir, f"{prefix}L{layer.depth}_")
+
+
+@matryoshka_app.command()
+def plan(
+    payload_size: int = typer.Argument(..., help="Size of innermost payload in bytes"),
+    carriers: List[Path] = typer.Option(
+        ..., "--carrier", "-c", help="Carrier image (outermost first; repeatable)"
+    ),
+    channels: str = typer.Option(
+        "RGBA", "--channels", help="Channel preset"
+    ),
+    bits: int = typer.Option(
+        2, "--bits", "-b", help="Bits per channel (1-8)", min=1, max=8
+    ),
+    exact: bool = typer.Option(
+        False, "--exact", help="Actually encode to measure exact PNG sizes (slow)"
+    ),
+):
+    """
+    📐 Plan a Matryoshka nesting without encoding.
+
+    Walks the carrier stack and predicts whether each layer has enough
+    capacity for the expected payload (original data for innermost,
+    serialised PNG for intermediate layers).
+
+    Examples:
+        stegg matryoshka plan 4096 -c a.png -c b.png -c c.png
+        stegg matryoshka plan 1024 -c a.png -c b.png --exact
+    """
+    if not carriers:
+        error("At least one --carrier is required")
+        raise typer.Exit(1)
+
+    carrier_tuples = _load_carriers(carriers)
+    config = MatryoshkaConfig(channels=channels, bits=bits)
+
+    mode = "exact" if exact else "estimate"
+    info(f"Planning {len(carrier_tuples)} layers for {payload_size:,}B payload (mode={mode})")
+
+    reports = plan_nesting(payload_size, carrier_tuples, config, mode=mode)
+    _print_plan(reports)
+
+    all_fit = all(r.fits for r in reports)
+    if all_fit:
+        success("All layers fit! ✓")
+    else:
+        first_bad = next(r for r in reports if not r.fits)
+        error(f"Overflow at layer {first_bad.layer} ({first_bad.carrier_name}): "
+              f"need {first_bad.payload_size:,}B, have {first_bad.capacity:,}B")
 
 
 # ============== INFO COMMAND ==============
