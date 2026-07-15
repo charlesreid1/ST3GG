@@ -28,6 +28,12 @@ from img_core import (
     _bits_array_to_bytes, _generate_pixel_indices
 )
 import crypto
+import matryoshka_core
+from matryoshka_core import (
+    MatryoshkaConfig, LayerReport, DecodeLayer,
+    encode_nested, decode_nested, capacity_for, plan_nesting,
+    is_image_data, extract_file_from_data, VALID_FILE_EXTENSIONS,
+)
 import numpy as np
 import re
 import string
@@ -816,305 +822,88 @@ def smart_scan_image(image: Image.Image, password: str = None) -> list:
     return results
 
 
+# Wire the smart-scan hook so decode_nested can fall back to smart_scan_image
+matryoshka_core.smart_scan_hook = smart_scan_image
+
+
 # ============== 🪆 MATRYOSHKA MODE - RECURSIVE STEG ==============
 
-def is_image_data(data: bytes) -> bool:
-    """Check if bytes look like an image file"""
-    if len(data) < 8:
-        return False
-    # PNG magic bytes
-    if data[:8] == b'\x89PNG\r\n\x1a\n':
-        return True
-    # JPEG magic bytes
-    if data[:2] == b'\xff\xd8':
-        return True
-    # GIF magic bytes
-    if data[:6] in (b'GIF87a', b'GIF89a'):
-        return True
-    # BMP magic bytes
-    if data[:2] == b'BM':
-        return True
-    return False
+# is_image_data, extract_file_from_data, VALID_FILE_EXTENSIONS are now
+# imported from matryoshka_core (see top-level import).
 
 
-# Valid file extensions for file format detection
-VALID_FILE_EXTENSIONS = {
-    # Images
-    'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'svg', 'tiff', 'tif',
-    # Documents
-    'txt', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'rtf',
-    # Code
-    'py', 'js', 'ts', 'html', 'css', 'json', 'xml', 'yaml', 'yml', 'md', 'csv',
-    'java', 'c', 'cpp', 'h', 'hpp', 'rs', 'go', 'rb', 'php', 'sh', 'bash',
-    # Archives
-    'zip', 'tar', 'gz', 'bz2', '7z', 'rar',
-    # Media
-    'mp3', 'mp4', 'wav', 'avi', 'mkv', 'mov', 'flac', 'ogg',
-    # Other
-    'bin', 'dat', 'exe', 'dll', 'so', 'key', 'pem', 'crt',
-}
+# ---------------------------------------------------------------------------
+# Thin wrappers over matryoshka_core — preserve old webui signatures + dict
+# return types so every endpoint and the hidden panel keep working unchanged.
+# ---------------------------------------------------------------------------
 
-
-def extract_file_from_data(data: bytes) -> tuple:
-    """
-    Extract filename and file data from encoded bytes.
-    Returns (filename, file_data) or (None, data) if not a file format.
-
-    File format: <length_byte><filename><file_data>
-    Where length_byte is the length of the filename (1-100 bytes).
-    """
-    if len(data) < 3:
-        return (None, data)
-
-    fname_len = data[0]
-
-    # Filename length must be reasonable (3-100 chars for "a.b" to reasonable max)
-    if fname_len < 3 or fname_len > 100:
-        return (None, data)
-
-    # Must have enough data for filename + at least 1 byte of content
-    if len(data) < fname_len + 2:
-        return (None, data)
-
-    try:
-        filename = data[1:1+fname_len].decode('utf-8')
-    except UnicodeDecodeError:
-        return (None, data)
-
-    # Validate filename structure
-    if '.' not in filename:
-        return (None, data)
-
-    # Check for invalid characters (only allow alphanumeric, ., -, _, space)
-    if not re.match(r'^[\w\-. ]+$', filename):
-        return (None, data)
-
-    # Filename must not start with . or space
-    if filename[0] in '. ':
-        return (None, data)
-
-    # Extract and validate extension
-    ext = filename.rsplit('.', 1)[-1].lower()
-    if ext not in VALID_FILE_EXTENSIONS:
-        return (None, data)
-
-    # All checks passed - this looks like a real file
-    file_data = data[1+fname_len:]
-    return (filename, file_data)
-
-
-def matryoshka_decode(image: Image.Image, max_depth: int = 3, password: str = None,
-                      current_depth: int = 0) -> list:
-    """
-    🪆 Recursively decode nested steganographic images.
-
-    Args:
-        image: The image to decode
-        max_depth: Maximum recursion depth (1-11)
-        password: Optional decryption password
-        current_depth: Current recursion level (internal)
-
-    Returns:
-        List of extraction results at each layer
-    """
-    results = []
-    layer_info = {
-        "depth": current_depth,
-        "type": "unknown",
-        "filename": None,
-        "data_size": 0,
-        "preview": "",
-        "has_nested": False,
-        "nested_results": [],
+def _decode_layer_to_dict(dl: DecodeLayer) -> dict:
+    """Convert a DecodeLayer dataclass back to the legacy dict shape."""
+    return {
+        "depth": dl.depth,
+        "type": dl.type,
+        "filename": dl.filename,
+        "data_size": dl.data_size,
+        "preview": dl.preview,
+        "has_nested": bool(dl.nested),
+        "nested_results": [_decode_layer_to_dict(n) for n in dl.nested],
+        "raw_data": dl.raw_data,
     }
 
-    if current_depth >= max_depth:
-        layer_info["type"] = "max_depth_reached"
-        layer_info["preview"] = f"⚠️ Max depth ({max_depth}) reached"
-        results.append(layer_info)
-        return results
 
-    try:
-        # Try auto-decode first (looks for STEG header)
-        try:
-            data = decode(image, None)
-            layer_info["type"] = "steg_header"
-        except:
-            # If no STEG header, try smart scan
-            scan_results = smart_scan_image(image, password)
-            best_result = None
-            for r in scan_results:
-                if r.get("status") in ["STEG_DETECTED", "STEG_HEADER", "TEXT_FOUND"]:
-                    best_result = r
-                    break
-
-            if best_result and best_result.get("raw_data"):
-                data = best_result["raw_data"]
-                layer_info["type"] = f"smart_scan_{best_result['name']}"
-            else:
-                layer_info["type"] = "no_data_found"
-                layer_info["preview"] = "No hidden data detected"
-                results.append(layer_info)
-                return results
-
-        # Decrypt if password provided
-        if password:
-            try:
-                data = crypto.decrypt(data, password)
-            except:
-                pass  # Decryption failed, use raw data
-
-        layer_info["data_size"] = len(data)
-
-        # Check if it's a file
-        filename, file_data = extract_file_from_data(data)
-
-        if filename:
-            layer_info["filename"] = filename
-            layer_info["data_size"] = len(file_data)
-
-            # Check if the extracted file is an image
-            if is_image_data(file_data):
-                layer_info["type"] = "nested_image"
-                layer_info["has_nested"] = True
-
-                # Recursively decode the nested image
-                try:
-                    nested_img = Image.open(io.BytesIO(file_data))
-                    nested_results = matryoshka_decode(
-                        nested_img,
-                        max_depth=max_depth,
-                        password=password,
-                        current_depth=current_depth + 1
-                    )
-                    layer_info["nested_results"] = nested_results
-                    layer_info["preview"] = f"🪆 Found nested image: {filename}"
-                except Exception as e:
-                    layer_info["preview"] = f"📁 Image file: {filename} (failed to recurse: {e})"
-            else:
-                layer_info["type"] = "file"
-                # Try to show preview of text files
-                ext = filename.split('.')[-1].lower() if '.' in filename else ''
-                if ext in ['txt', 'md', 'json', 'xml', 'html', 'css', 'js', 'py', 'csv']:
-                    try:
-                        layer_info["preview"] = file_data[:200].decode('utf-8')
-                    except:
-                        layer_info["preview"] = f"📁 Binary file: {filename}"
-                else:
-                    layer_info["preview"] = f"📁 File: {filename} ({format_size(len(file_data))})"
-        else:
-            # Raw data - check if it's an image
-            if is_image_data(data):
-                layer_info["type"] = "nested_image_raw"
-                layer_info["has_nested"] = True
-
-                try:
-                    nested_img = Image.open(io.BytesIO(data))
-                    nested_results = matryoshka_decode(
-                        nested_img,
-                        max_depth=max_depth,
-                        password=password,
-                        current_depth=current_depth + 1
-                    )
-                    layer_info["nested_results"] = nested_results
-                    layer_info["preview"] = "🪆 Found raw nested image data"
-                except Exception as e:
-                    layer_info["preview"] = f"Image data (failed to recurse: {e})"
-            else:
-                # Try as text
-                try:
-                    text = data.decode('utf-8')
-                    layer_info["type"] = "text"
-                    layer_info["preview"] = text[:300]
-                except:
-                    layer_info["type"] = "binary"
-                    layer_info["preview"] = f"Binary data: {data[:50].hex()}..."
-
-        # Store raw data for download
-        layer_info["raw_data"] = file_data if filename else data
-
-    except Exception as e:
-        layer_info["type"] = "error"
-        layer_info["preview"] = f"Error: {str(e)}"
-
-    results.append(layer_info)
-    return results
+def _layer_report_to_dict(r: LayerReport) -> dict:
+    """Convert a LayerReport dataclass back to the legacy dict shape."""
+    return {
+        "layer": r.layer,
+        "carrier": r.carrier_name,
+        "capacity": r.capacity,
+        "payload_size": r.payload_size,
+        "fits": r.fits,
+        "output_size": r.output_size,
+    }
 
 
-def matryoshka_encode(payload: bytes, carriers: list, config = None,
+def _steg_config_to_matryoshka(sc) -> MatryoshkaConfig:
+    """Extract channels + bits from a StegConfig into a MatryoshkaConfig."""
+    channels = "".join(c.name for c in sc.channels)
+    return MatryoshkaConfig(channels=channels, bits=sc.bits_per_channel)
+
+
+def matryoshka_decode(image: Image.Image, max_depth: int = 3,
+                      password: str = None, current_depth: int = 0) -> list:
+    """🪆 Recursively decode nested steganographic images.
+
+    Thin wrapper over :func:`matryoshka_core.decode_nested` that returns
+    legacy dicts for backward compatibility with the web UI.
+    """
+    config = MatryoshkaConfig(max_depth=max_depth, password=password)
+    layers = decode_nested(image, config, current_depth=current_depth)
+    return [_decode_layer_to_dict(dl) for dl in layers]
+
+
+def matryoshka_encode(payload: bytes, carriers: list, config=None,
                       password: str = None) -> tuple:
+    """🪆 Recursively encode nested steganographic images.
+
+    Thin wrapper over :func:`matryoshka_core.encode_nested` that returns
+    legacy dicts for backward compatibility with the web UI.
     """
-    🪆 Recursively encode nested steganographic images.
-
-    Creates a "Russian nesting doll" of hidden data, encoding the payload
-    into the innermost carrier, then that result into the next carrier, etc.
-
-    Args:
-        payload: The data to hide (innermost secret)
-        carriers: List of (Image, filename) tuples - innermost carrier FIRST
-        config: StegConfig to use for all layers (or None for auto)
-        password: Optional encryption password
-
-    Returns:
-        Tuple of (final_image, layer_info_list)
-    """
-    if not carriers:
-        raise ValueError("At least one carrier image is required")
-
     if config is None:
-        config = create_config(channels='RGBA', bits=2)  # Default: good capacity
-
-    layer_info = []
-    current_data = payload
-
-    # Encode from innermost to outermost
-    for i, (carrier_img, carrier_name) in enumerate(carriers):
-        layer_num = i + 1
-
-        # Calculate capacity
-        capacity = _calculate_capacity_bytes(carrier_img, config)
-        data_size = len(current_data)
-
-        layer_info.append({
-            'layer': layer_num,
-            'carrier': carrier_name,
-            'capacity': capacity,
-            'payload_size': data_size,
-            'fits': data_size <= capacity
-        })
-
-        if data_size > capacity:
-            raise ValueError(f"Layer {layer_num} ({carrier_name}): payload {data_size} bytes exceeds capacity {capacity} bytes")
-
-        # Encrypt if password provided (only innermost layer or all?)
-        data_to_encode = current_data
-        if password and i == 0:  # Only encrypt the innermost payload
-            data_to_encode = crypto.encrypt(current_data, password)
-
-        # Encode current data into this carrier
-        encoded_img = encode(carrier_img, data_to_encode, config)
-
-        # If there are more carriers, convert this to PNG bytes for next layer
-        if i < len(carriers) - 1:
-            buffer = io.BytesIO()
-            encoded_img.save(buffer, format='PNG')
-            current_data = buffer.getvalue()
-            layer_info[-1]['output_size'] = len(current_data)
-        else:
-            # Final layer - return the image
-            layer_info[-1]['output_size'] = 'final'
-
-    return encoded_img, layer_info
+        mc = MatryoshkaConfig(channels="RGBA", bits=2, password=password)
+    else:
+        mc = _steg_config_to_matryoshka(config)
+        mc.password = password
+    result_img, reports = encode_nested(payload, carriers, mc)
+    return result_img, [_layer_report_to_dict(r) for r in reports]
 
 
 def _calculate_capacity_bytes(image: Image.Image, config) -> int:
-    """Calculate byte capacity for an image with given config (simplified, returns int)"""
-    width, height = image.size
-    channels = len(config.channels)
-    bits = config.bits_per_channel
-    # Account for STEG header overhead (~48 bytes)
-    raw_capacity = (width * height * channels * bits) // 8
-    return max(0, raw_capacity - 64)  # Reserve space for header
+    """Calculate byte capacity for an image with given config.
+
+    Thin wrapper over :func:`matryoshka_core.capacity_for`.
+    """
+    mc = _steg_config_to_matryoshka(config)
+    return capacity_for(image, mc)
 
 
 # ============== UI COMPONENTS ==============
