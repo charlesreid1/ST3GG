@@ -19,6 +19,9 @@ from .image import (  # noqa: F401
     execute_encode_manual,
     execute_encode_metadata,
     execute_lsb_smart_scan,
+    execute_pvd_capacity,
+    execute_pvd_decode,
+    execute_pvd_encode,
     execute_read_metadata,
     execute_read_png_chunks,
 )

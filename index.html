@@ -8521,8 +8521,17 @@
                 }
             };
 
+            // For 'both' we partition the image into disjoint pixel sets so the
+            // two passes cannot corrupt each other: horizontal scans the top
+            // half (rows 0..hSplit-1), vertical scans the bottom half in
+            // (row,row+1) pairs. This is the only reason the two passes are
+            // independently decodable.
+            const hSplit = (direction === 'both') ? Math.floor(height / 2) : height;
+            const vStart = (direction === 'both') ? Math.floor(height / 2) : 0;
+
             if (direction === 'horizontal' || direction === 'both') {
-                const pairCount = Math.floor(width / 2) * height;
+                const hRows = hSplit;
+                const pairCount = Math.floor(width / 2) * hRows;
                 processDirection(
                     (i) => {
                         const row = Math.floor(i / Math.floor(width / 2));
@@ -8535,11 +8544,12 @@
             }
 
             if (direction === 'vertical' || direction === 'both') {
-                const pairCount = width * Math.floor(height / 2);
+                const vRows = height - vStart;
+                const pairCount = width * Math.floor(vRows / 2);
                 processDirection(
                     (i) => {
                         const col = i % width;
-                        const row = Math.floor(i / width) * 2;
+                        const row = vStart + Math.floor(i / width) * 2;
                         if (row + 1 >= height) return [null, null];
                         return [row * width + col, (row + 1) * width + col];
                     },
@@ -8581,9 +8591,14 @@
                 }
             };
 
-            // First pass - get enough bits for header (32 bits)
+            // Must mirror encoder's disjoint-partition for 'both'.
+            const hSplit = (direction === 'both') ? Math.floor(height / 2) : height;
+            const vStart = (direction === 'both') ? Math.floor(height / 2) : 0;
+            const maxBitsCap = 32 + 8 * 65536;
+
             if (direction === 'horizontal' || direction === 'both') {
-                const pairCount = Math.floor(width / 2) * height;
+                const hRows = hSplit;
+                const pairCount = Math.floor(width / 2) * hRows;
                 processDirection(
                     (i) => {
                         const row = Math.floor(i / Math.floor(width / 2));
@@ -8591,21 +8606,24 @@
                         return [row * width + col, row * width + col + 1];
                     },
                     pairCount,
-                    32 + 8 * 65536 // Header + max reasonable data
+                    maxBitsCap
                 );
             }
 
-            if ((direction === 'vertical' || direction === 'both') && bits.length < 32) {
-                const pairCount = width * Math.floor(height / 2);
+            // Always run the vertical pass in 'both' mode -- the horizontal
+            // pass may have written the full header but not the payload.
+            if (direction === 'vertical' || direction === 'both') {
+                const vRows = height - vStart;
+                const pairCount = width * Math.floor(vRows / 2);
                 processDirection(
                     (i) => {
                         const col = i % width;
-                        const row = Math.floor(i / width) * 2;
+                        const row = vStart + Math.floor(i / width) * 2;
                         if (row + 1 >= height) return [null, null];
                         return [row * width + col, (row + 1) * width + col];
                     },
                     pairCount,
-                    32 + 8 * 65536
+                    maxBitsCap
                 );
             }
 
