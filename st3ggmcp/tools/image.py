@@ -12,6 +12,7 @@ from PIL import Image
 
 import analysis_tools as at
 import injector
+import pvd_core
 import steg_core
 
 from ._common import (
@@ -514,6 +515,185 @@ async def execute_encode_metadata(
 
 
 # ---------------------------------------------------------------------------
+# stegg_pvd_encode / stegg_pvd_decode / stegg_pvd_capacity
+# ---------------------------------------------------------------------------
+_PVD_RANGE_TYPES = tuple(pvd_core.PVD_RANGES.keys())
+_PVD_DIRECTIONS = ("horizontal", "vertical", "both")
+
+
+def _validate_pvd_args(direction: str, range_type: str) -> str | None:
+    if direction not in _PVD_DIRECTIONS:
+        return f"direction must be one of {list(_PVD_DIRECTIONS)}, got {direction!r}"
+    if range_type not in _PVD_RANGE_TYPES:
+        return f"range_type must be one of {list(_PVD_RANGE_TYPES)}, got {range_type!r}"
+    return None
+
+
+async def execute_pvd_capacity(
+    path: str,
+    direction: str = "horizontal",
+    range_type: str = "wu-tsai",
+    **_kw,
+) -> str:
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+    if (verr := _validate_pvd_args(direction, range_type)) is not None:
+        return f"stegg_pvd_capacity: {verr}"
+
+    def work():
+        img = Image.open(io.BytesIO(data))
+        bits = pvd_core.capacity_bits(img, direction=direction, range_type=range_type)
+        return {
+            "size": list(img.size),
+            "mode": img.mode,
+            "direction": direction,
+            "range_type": range_type,
+            "capacity_bits": bits,
+            "capacity_bytes": pvd_core.capacity_bytes(img, direction=direction, range_type=range_type),
+        }
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_pvd_capacity timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("pvd_capacity failed")
+        return f"stegg_pvd_capacity error: {exc}"
+    return truncate_json(result)
+
+
+async def execute_pvd_encode(
+    path: str,
+    message: str,
+    direction: str = "horizontal",
+    range_type: str = "wu-tsai",
+    output_path: str | None = None,
+    **_kw,
+) -> str:
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+    if not isinstance(message, str):
+        return "stegg_pvd_encode error: 'message' must be a string"
+    if (verr := _validate_pvd_args(direction, range_type)) is not None:
+        return f"stegg_pvd_encode: {verr}"
+
+    payload = message.encode("utf-8")
+
+    def work():
+        img = Image.open(io.BytesIO(data))
+        cap = pvd_core.capacity_bytes(img, direction=direction, range_type=range_type)
+        if len(payload) > cap:
+            return {"__err__": (
+                f"payload is {len(payload)} bytes but PVD carrier has only "
+                f"{cap} usable bytes for direction={direction}, range_type={range_type}."
+            )}
+        try:
+            encoded_img = pvd_core.encode(img, payload, direction=direction, range_type=range_type)
+        except ValueError as exc:
+            return {"__err__": str(exc)}
+        buf = io.BytesIO()
+        encoded_img.save(buf, format="PNG")
+        return {
+            "encoded_bytes": buf.getvalue(),
+            "capacity_bytes": cap,
+            "payload_bytes": len(payload),
+            "mode": encoded_img.mode,
+            "size": list(encoded_img.size),
+        }
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_pvd_encode timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("pvd_encode failed")
+        return f"stegg_pvd_encode error: {exc}"
+
+    if isinstance(result, dict) and "__err__" in result:
+        return f"stegg_pvd_encode: {result['__err__']}"
+
+    out_path = output_path or default_output_path(meta)
+    try:
+        Path(out_path).write_bytes(result["encoded_bytes"])
+    except Exception as exc:
+        return f"stegg_pvd_encode: failed to write {out_path}: {exc}"
+
+    summary = {
+        "output_path": str(Path(out_path).resolve()),
+        "output_bytes": len(result["encoded_bytes"]),
+        "config": {
+            "method": "PVD",
+            "direction": direction,
+            "range_type": range_type,
+        },
+        "capacity_bytes": result["capacity_bytes"],
+        "payload_bytes": result["payload_bytes"],
+        "size": result["size"],
+        "mode": result["mode"],
+        "text": (
+            f"stashed {result['payload_bytes']} bytes into {result['size']} {result['mode']} "
+            f"carrier via PVD (direction={direction}, range_type={range_type}). "
+            f"wrote {out_path}."
+        ),
+    }
+    return truncate_json(summary)
+
+
+async def execute_pvd_decode(
+    path: str,
+    direction: str = "horizontal",
+    range_type: str = "wu-tsai",
+    max_payload: int = 1_000_000,
+    **_kw,
+) -> str:
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+    if (verr := _validate_pvd_args(direction, range_type)) is not None:
+        return f"stegg_pvd_decode: {verr}"
+    try:
+        max_payload_int = int(max_payload)
+    except (TypeError, ValueError):
+        return "stegg_pvd_decode error: 'max_payload' must be an integer"
+    if max_payload_int <= 0:
+        return "stegg_pvd_decode error: 'max_payload' must be positive"
+
+    def work():
+        img = Image.open(io.BytesIO(data))
+        try:
+            payload = pvd_core.decode(
+                img,
+                direction=direction,
+                range_type=range_type,
+                max_payload=max_payload_int,
+            )
+        except ValueError as exc:
+            return {"decoded": False, "error": str(exc)}
+        out: dict[str, Any] = {
+            "decoded": True,
+            "length": len(payload),
+            "direction": direction,
+            "range_type": range_type,
+        }
+        try:
+            out["utf8"] = payload.decode("utf-8")[:2000]
+        except UnicodeDecodeError:
+            out["hex_head"] = payload[:64].hex()
+        return out
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_pvd_decode timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("pvd_decode failed")
+        return f"stegg_pvd_decode error: {exc}"
+    return truncate_json(result)
+
+
+# ---------------------------------------------------------------------------
 # Registry: colocated executors + schemas
 # ---------------------------------------------------------------------------
 EXECUTORS = {
@@ -525,6 +705,9 @@ EXECUTORS = {
     "stegg_carve": execute_carve,
     "stegg_encode_manual": execute_encode_manual,
     "stegg_encode_metadata": execute_encode_metadata,
+    "stegg_pvd_capacity": execute_pvd_capacity,
+    "stegg_pvd_encode": execute_pvd_encode,
+    "stegg_pvd_decode": execute_pvd_decode,
 }
 
 
@@ -653,6 +836,60 @@ SCHEMAS = {
                 "output_path": {"type": "string", "description": "Where to write the modified PNG."},
             },
             "required": ["path", "chunk_type", "value"],
+        },
+    },
+    "stegg_pvd_capacity": {
+        "description": (
+            "Report the PVD payload capacity of an image for the given direction "
+            "and range table. Cheap: iterates every pair once and sums the per-pair "
+            "bit budgets. For direction='both' the value is max(horizontal, vertical), "
+            "not the sum -- the two passes are not independently decodable in the "
+            "current JS-compatible implementation."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "direction": {"type": "string", "description": "horizontal (default), vertical, or both."},
+                "range_type": {"type": "string", "description": "wu-tsai (default), wide, or narrow."},
+            },
+            "required": ["path"],
+        },
+    },
+    "stegg_pvd_encode": {
+        "description": (
+            "Hide a payload in an image using PVD (Pixel Value Differencing) "
+            "steganography. Harder to detect than LSB via histogram analysis and "
+            "wire-compatible with the HTML UI's PVD encoder. Writes an RGB PNG "
+            "to output_path (default: stegg_-prefixed sibling of the input)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "message": {"type": "string", "description": "The payload to hide, as a UTF-8 string."},
+                "direction": {"type": "string", "description": "horizontal (default), vertical, or both."},
+                "range_type": {"type": "string", "description": "wu-tsai (default), wide, or narrow."},
+                "output_path": {"type": "string", "description": "Where to write the encoded PNG."},
+            },
+            "required": ["path", "message"],
+        },
+    },
+    "stegg_pvd_decode": {
+        "description": (
+            "Recover a PVD-encoded payload from an image. Requires the same "
+            "direction and range_type used to encode -- try each combination if "
+            "unknown. Rejects absurd length headers via max_payload."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "direction": {"type": "string", "description": "horizontal (default), vertical, or both."},
+                "range_type": {"type": "string", "description": "wu-tsai (default), wide, or narrow."},
+                "max_payload": {"type": "integer", "description": "Reject length headers above this. Default 1_000_000."},
+            },
+            "required": ["path"],
         },
     },
 }
