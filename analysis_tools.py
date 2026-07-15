@@ -3174,6 +3174,21 @@ def _register_all_tools():
     TOOL_REGISTRY.register('decode_math_alphanumeric', decode_math_alphanumeric)
     TOOL_REGISTRY.register('decode_emoji_skin_tone', decode_emoji_skin_tone)
 
+    # Jailbreak / prompt-injection detectors (bytes-shaped wrappers).
+    try:
+        from jailbreak_core import (
+            detect_injection_filename_bytes,
+            detect_jailbreak_in_chunks_bytes,
+            detect_jailbreak_payload_bytes,
+            detect_full_injection_package_bytes,
+        )
+        TOOL_REGISTRY.register('detect_injection_filename', detect_injection_filename_bytes)
+        TOOL_REGISTRY.register('detect_jailbreak_chunks', detect_jailbreak_in_chunks_bytes)
+        TOOL_REGISTRY.register('detect_jailbreak_payload', detect_jailbreak_payload_bytes)
+        TOOL_REGISTRY.register('jailbreak_full_scan', detect_full_injection_package_bytes)
+    except ImportError:
+        pass
+
     # SPECTER channel-cipher detection
     try:
         from specter import specter_detect as _specter_detect

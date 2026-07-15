@@ -29,11 +29,12 @@ from img_core import (
     CHANNEL_PRESETS
 )
 from crypto import encrypt, decrypt, crypto_status
-from injector import (
-    generate_injection_filename, get_template_names,
+from jailbreak_core import (
+    generate_injection_filename,
+    get_filename_template_names as get_template_names,
     get_jailbreak_template, get_jailbreak_names,
-    zalgo_text
 )
+from injector import zalgo_text
 from ascii_art import STEGOSAURUS_SMALL, TAGLINES, BANNER_SMALL
 
 

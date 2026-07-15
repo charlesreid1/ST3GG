@@ -57,11 +57,12 @@ except Exception:
     encrypt = decrypt = None
     def get_available_methods(): return ["none", "xor"]
     def crypto_status(): return "⚠ crypto module unavailable (install cryptography package)"
-from injector import (
-    generate_injection_filename, get_template_names,
+from jailbreak_core import (
+    generate_injection_filename, get_filename_template_names as get_template_names,
     get_jailbreak_template, get_jailbreak_names,
-    zalgo_text, leetspeak
+    compose_image_jailbreak, detect_full_injection_package,
 )
+from injector import zalgo_text, leetspeak
 from ascii_art import (
     BANNER, BANNER_SMALL, STEGOSAURUS_ASCII_SIMPLE, STEGOSAURUS_SMALL,
     STATUS, FOOTER, TAGLINES, section_header, channel_bar, COLORS
@@ -662,6 +663,72 @@ def inject_show(template: str = typer.Argument(..., help="Template name")):
         ))
     else:
         error(f"Template not found: {template}")
+
+    console.print(f"\n{FOOTER}")
+
+
+@inject_app.command("compose")
+def inject_compose(
+    carrier: Path = typer.Option(..., "--carrier", "-i", help="Carrier image path"),
+    template: str = typer.Option("pliny_classic", "--template", "-t", help="Jailbreak template"),
+    channels: str = typer.Option("RGB", "--channels", "-c", help="LSB channel preset"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output PNG path"),
+    filename_template: str = typer.Option("chatgpt_decoder", "--filename-template", help="Injection filename template"),
+    encrypt: bool = typer.Option(False, "--encrypt", help="AES-256-GCM encrypt the payload"),
+    password: Optional[str] = typer.Option(None, "--password", "-p", help="Encryption password"),
+):
+    """Compose a full multi-vector jailbreak package (LSB + metadata + filename)"""
+    print_banner(small=True)
+    console.print(section_header("Jailbreak Compose"))
+    console.print()
+
+    from PIL import Image as _Image
+
+    img = _Image.open(carrier)
+    payload = compose_image_jailbreak(
+        template, img,
+        channels=channels,
+        filename_template=filename_template,
+        encrypt=encrypt,
+        password=password,
+    )
+
+    out_path = output or Path(payload.filename)
+    out_path.write_bytes(payload.image_bytes)
+
+    success(f"Wrote stego image: [cyan]{out_path}[/cyan]")
+    info(f"Filename template: [cyan]{payload.filename}[/cyan]")
+    info(f"Technique: [cyan]{payload.technique_summary}[/cyan]")
+    console.print(f"\n{FOOTER}")
+
+
+@inject_app.command("detect")
+def inject_detect(
+    target: Path = typer.Option(..., "--target", "-i", help="Image or text file to scan"),
+    full: bool = typer.Option(False, "--full", help="Full-spectrum scan across all vectors"),
+):
+    """Scan a file for jailbreak / prompt-injection indicators"""
+    print_banner(small=True)
+    console.print(section_header("Jailbreak Detect"))
+    console.print()
+
+    suffix = target.suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".bmp", ".gif"}:
+        result = detect_full_injection_package(image_path=str(target))
+    else:
+        result = detect_full_injection_package(text_path=str(target))
+
+    severity = result.get("severity", "clean")
+    color = {"clean": "green", "low": "yellow", "medium": "orange3", "high": "red"}.get(severity, "white")
+    console.print(f"  Severity: [{color}]{severity.upper()}[/{color}]")
+    console.print(f"  Detected: {result.get('detected')}")
+    console.print(f"  Hits: {result.get('hit_count', 0)}")
+    console.print(f"  Techniques: {', '.join(result.get('techniques', [])) or '(none)'}")
+
+    if full:
+        import json as _json
+        console.print("\n[dim]Vectors:[/dim]")
+        console.print(_json.dumps(result.get("vectors", {}), indent=2, default=str))
 
     console.print(f"\n{FOOTER}")
 

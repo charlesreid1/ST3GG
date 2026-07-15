@@ -1,4 +1,8 @@
-"""injector: tEXt / iTXt / private chunk inject + read-back."""
+"""injector: tEXt / iTXt / private chunk inject + read-back.
+
+Jailbreak template registry and filename-generation tests moved to
+`test_jailbreak_core.py`.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +13,6 @@ from PIL import Image
 
 from injector import (
     extract_text_chunks,
-    generate_injection_filename,
-    get_jailbreak_names,
-    get_jailbreak_template,
-    get_template_info,
-    get_template_names,
     inject_itxt_chunk,
     inject_metadata_pil,
     inject_private_chunk,
@@ -85,29 +84,3 @@ def test_inject_metadata_pil_reads_back(medium_carrier):
     _, png_bytes = inject_metadata_pil(medium_carrier, {"Note": "meta-payload"})
     chunks = extract_text_chunks(png_bytes)
     assert chunks.get("Note") == "meta-payload"
-
-
-# ---------- Filename / jailbreak templates ----------
-
-def test_all_injection_templates_generate_filenames():
-    for name in get_template_names():
-        if name == "custom":
-            fn = generate_injection_filename("custom", channels="RGB", custom_template="probe_{rand4}")
-        else:
-            fn = generate_injection_filename(name, channels="RGB")
-        assert fn.endswith(".png")
-        assert "RGB" in fn or name == "subtle" or name == "custom"
-
-
-def test_template_info_returns_metadata_for_all_templates():
-    for name in get_template_names():
-        info = get_template_info(name)
-        assert set(info.keys()) >= {"name", "template", "description", "variables"}
-
-
-def test_jailbreak_templates_registered():
-    names = get_jailbreak_names()
-    assert "pliny_classic" in names
-    assert "empty" in names
-    assert get_jailbreak_template("empty") == ""
-    assert "PLINY" in get_jailbreak_template("pliny_classic")

@@ -37,9 +37,13 @@ from img_core import (
     analyze_image, detect_encoding,
 )
 from analysis_tools import execute_action, list_available_tools
-from injector import (
+from jailbreak_core import (
     generate_injection_filename, get_jailbreak_template,
-    get_jailbreak_names, inject_text_chunk, inject_itxt_chunk,
+    get_jailbreak_names, compose_image_jailbreak,
+    detect_full_injection_package,
+)
+from injector import (
+    inject_text_chunk, inject_itxt_chunk,
     inject_private_chunk, read_png_chunks, extract_text_chunks,
     inject_metadata_pil,
 )
@@ -292,6 +296,45 @@ def cmd_templates(_args):
     _out({"templates": templates, "count": len(templates)})
 
 
+def cmd_jailbreak_compose(args):
+    img_path = Path(args.carrier).expanduser().resolve()
+    if not img_path.exists():
+        _err(f"Carrier not found: {img_path}")
+    img = Image.open(img_path)
+    payload = compose_image_jailbreak(
+        args.template,
+        img,
+        channels=args.channels,
+        filename_template=args.filename_template,
+        encrypt=bool(args.encrypt),
+        password=args.password or None,
+    )
+    out = Path(args.output).expanduser().resolve() if args.output else Path(payload.filename)
+    out.write_bytes(payload.image_bytes)
+    _out({
+        "output": str(out),
+        "filename_template_result": payload.filename,
+        "template": args.template,
+        "channels": args.channels,
+        "technique_summary": payload.technique_summary,
+        "metadata_chunks": list(payload.metadata_chunks.keys()),
+    })
+
+
+def cmd_jailbreak_detect(args):
+    target = Path(args.target).expanduser().resolve()
+    if not target.exists():
+        _err(f"Target not found: {target}")
+    suffix = target.suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".bmp", ".gif"}:
+        result = detect_full_injection_package(image_path=str(target))
+    else:
+        result = detect_full_injection_package(text_path=str(target))
+    if not args.full:
+        result = {k: v for k, v in result.items() if k != "vectors"}
+    _out(result)
+
+
 def cmd_analysis_tool(args):
     p = Path(args.image).expanduser().resolve()
     if not p.exists():
@@ -402,6 +445,23 @@ def build_parser():
     # templates
     tmpl = sub.add_parser("templates", help="List jailbreak templates")
     tmpl.set_defaults(func=cmd_templates)
+
+    # jailbreak-compose
+    jc = sub.add_parser("jailbreak-compose", help="Compose multi-vector jailbreak package")
+    jc.add_argument("-i", "--carrier", required=True, help="Carrier image path")
+    jc.add_argument("-t", "--template", default="pliny_classic")
+    jc.add_argument("-c", "--channels", default="RGB")
+    jc.add_argument("-o", "--output", default=None, help="Output PNG path")
+    jc.add_argument("--filename-template", default="chatgpt_decoder")
+    jc.add_argument("--encrypt", action="store_true")
+    jc.add_argument("-p", "--password", default=None)
+    jc.set_defaults(func=cmd_jailbreak_compose)
+
+    # jailbreak-detect
+    jd = sub.add_parser("jailbreak-detect", help="Scan file for jailbreak indicators")
+    jd.add_argument("target")
+    jd.add_argument("--full", action="store_true")
+    jd.set_defaults(func=cmd_jailbreak_detect)
 
     # analysis-tool
     at = sub.add_parser("analysis-tool", help="Run a specific analysis function")

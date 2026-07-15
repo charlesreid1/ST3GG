@@ -16,6 +16,7 @@ from PIL import Image
 
 from injector import extract_text_chunks, inject_text_chunk
 from img_core import create_config, decode, encode
+from jailbreak_core import compose_image_jailbreak, detect_full_injection_package
 
 pytestmark = pytest.mark.pipeline
 
@@ -55,3 +56,43 @@ def test_injector_stack(medium_carrier, pipelines_dir):
     iend_idx = final_bytes.rfind(b"IEND")
     trailing = final_bytes[iend_idx + 4 + 4:]  # skip IEND chunk type + CRC
     assert TRAILING_BYTES.strip() in trailing
+
+
+def test_full_jailbreak_stack(medium_carrier, pipelines_dir):
+    """Pipeline — jailbreak across all vectors via compose_image_jailbreak."""
+    # Fixed seed → the long injection-payload filename is stable across runs,
+    # so the committed showcase artifact keeps the same name.
+    payload = compose_image_jailbreak(
+        "pliny_classic",
+        medium_carrier,
+        channels="RGB",
+        bits=1,
+        filename_template="chatgpt_decoder",
+        metadata_inject=True,
+        trailing_payload=b"\n[trailing-jailbreak-marker]\n",
+        filename_seed=20260715,
+    )
+
+    out = pipelines_dir / payload.filename
+    out.write_bytes(payload.image_bytes)
+
+    # Recover LSB layer
+    img = Image.open(io.BytesIO(payload.image_bytes))
+    from img_core import decode as _decode
+    assert _decode(img, create_config(channels="RGB", bits=1)) == payload.text_content.encode("utf-8")
+
+    # Recover text chunks (metadata layer)
+    chunks = extract_text_chunks(payload.image_bytes)
+    assert "Comment" in chunks
+    assert "Instructions" in chunks
+
+    # Recover trailing layer
+    iend_idx = payload.image_bytes.rfind(b"IEND")
+    trailing = payload.image_bytes[iend_idx + 8:]
+    assert b"trailing-jailbreak-marker" in trailing
+
+    # Full-spectrum detector picks up the payload across vectors
+    result = detect_full_injection_package(image_path=str(out))
+    assert result["detected"] is True
+    assert result["hit_count"] >= 2
+    assert result["severity"] in ("medium", "high")
