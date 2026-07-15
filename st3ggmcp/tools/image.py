@@ -694,6 +694,172 @@ async def execute_pvd_decode(
 
 
 # ---------------------------------------------------------------------------
+# stegg_dct_encode / stegg_dct_decode / stegg_dct_capacity
+# ---------------------------------------------------------------------------
+_DCT_ROBUSTNESS = {"low", "medium", "high"}
+
+
+async def execute_dct_encode(
+    path: str,
+    message: str,
+    robustness: str = "medium",
+    block_size: int = 8,
+    output_path: str | None = None,
+    **_kw,
+) -> str:
+    """Hide bytes in an image's DCT coefficients (frequency-domain steg)."""
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+
+    if not isinstance(message, str):
+        return "stegg_dct_encode error: 'message' must be a string"
+    payload = message.encode("utf-8")
+
+    if robustness not in _DCT_ROBUSTNESS:
+        return (
+            f"stegg_dct_encode error: unknown robustness '{robustness}'. "
+            f"Use one of: {', '.join(sorted(_DCT_ROBUSTNESS))}"
+        )
+    try:
+        bs = int(block_size)
+    except (TypeError, ValueError):
+        return "stegg_dct_encode error: 'block_size' must be an integer"
+    if not (1 <= bs <= 32):
+        return "stegg_dct_encode error: 'block_size' must be in 1..32"
+
+    def work():
+        img = Image.open(io.BytesIO(data))
+        cap = steg_core.dct_capacity(img, block_size=bs)
+        usable = int(cap["usable_bytes"])
+        if len(payload) > usable:
+            return {"__err__": (
+                f"payload is {len(payload)} bytes but DCT carrier has only "
+                f"{usable} usable bytes (block_size={bs})."
+            )}
+        encoded_img = steg_core.dct_encode(
+            img, payload, robustness=robustness, block_size=bs
+        )
+        buf = io.BytesIO()
+        encoded_img.save(buf, format="PNG")
+        return {
+            "encoded_bytes": buf.getvalue(),
+            "capacity_bytes": usable,
+            "payload_bytes": len(payload),
+            "mode": encoded_img.mode,
+            "size": list(encoded_img.size),
+        }
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_dct_encode timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("dct_encode failed")
+        return f"stegg_dct_encode error: {exc}"
+
+    if isinstance(result, dict) and "__err__" in result:
+        return f"stegg_dct_encode: {result['__err__']}"
+
+    out_path = output_path or default_output_path(meta)
+    try:
+        Path(out_path).write_bytes(result["encoded_bytes"])
+    except Exception as exc:
+        return f"stegg_dct_encode: failed to write {out_path}: {exc}"
+
+    summary = {
+        "output_path": str(Path(out_path).resolve()),
+        "output_bytes": len(result["encoded_bytes"]),
+        "config": {
+            "method": "dct",
+            "robustness": robustness,
+            "block_size": bs,
+        },
+        "capacity_bytes": result["capacity_bytes"],
+        "payload_bytes": result["payload_bytes"],
+        "size": result["size"],
+        "mode": result["mode"],
+        "text": (
+            f"stashed {result['payload_bytes']} bytes into {result['size']} {result['mode']} "
+            f"carrier via DCT (robustness={robustness}, block_size={bs}). "
+            f"medium/high survive JPEG recompression. wrote {out_path}."
+        ),
+    }
+    return truncate_json(summary)
+
+
+async def execute_dct_decode(
+    path: str,
+    block_size: int = 8,
+    **_kw,
+) -> str:
+    """Recover a payload previously hidden with stegg_dct_encode (or the browser DCT)."""
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+
+    try:
+        bs = int(block_size)
+    except (TypeError, ValueError):
+        return "stegg_dct_decode error: 'block_size' must be an integer"
+    if not (1 <= bs <= 32):
+        return "stegg_dct_decode error: 'block_size' must be in 1..32"
+
+    def work():
+        img = Image.open(io.BytesIO(data))
+        try:
+            payload = steg_core.dct_decode(img, block_size=bs)
+        except Exception as exc:
+            return {"decoded": False, "error": str(exc)}
+        out: dict[str, Any] = {"decoded": True, "length": len(payload)}
+        try:
+            out["utf8"] = payload.decode("utf-8")[:2000]
+        except UnicodeDecodeError:
+            out["hex_head"] = payload[:64].hex()
+        return out
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_dct_decode timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("dct_decode failed")
+        return f"stegg_dct_decode error: {exc}"
+    return truncate_json(result)
+
+
+async def execute_dct_capacity(
+    path: str,
+    block_size: int = 8,
+    **_kw,
+) -> str:
+    """Report how many bytes fit under DCT embedding for an image."""
+    data, meta, err = read_bytes(path)
+    if err:
+        return err
+
+    try:
+        bs = int(block_size)
+    except (TypeError, ValueError):
+        return "stegg_dct_capacity error: 'block_size' must be an integer"
+    if not (1 <= bs <= 32):
+        return "stegg_dct_capacity error: 'block_size' must be in 1..32"
+
+    def work():
+        img = Image.open(io.BytesIO(data))
+        return steg_core.dct_capacity(img, block_size=bs)
+
+    try:
+        report = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_dct_capacity timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("dct_capacity failed")
+        return f"stegg_dct_capacity error: {exc}"
+    return truncate_json(report)
+
+
+# ---------------------------------------------------------------------------
 # Registry: colocated executors + schemas
 # ---------------------------------------------------------------------------
 EXECUTORS = {
@@ -708,6 +874,9 @@ EXECUTORS = {
     "stegg_pvd_capacity": execute_pvd_capacity,
     "stegg_pvd_encode": execute_pvd_encode,
     "stegg_pvd_decode": execute_pvd_decode,
+    "stegg_dct_encode": execute_dct_encode,
+    "stegg_dct_decode": execute_dct_decode,
+    "stegg_dct_capacity": execute_dct_capacity,
 }
 
 
@@ -888,6 +1057,57 @@ SCHEMAS = {
                 "direction": {"type": "string", "description": "horizontal (default), vertical, or both."},
                 "range_type": {"type": "string", "description": "wu-tsai (default), wide, or narrow."},
                 "max_payload": {"type": "integer", "description": "Reject length headers above this. Default 1_000_000."},
+            },
+            "required": ["path"],
+        },
+    },
+    "stegg_dct_encode": {
+        "description": (
+            "Hide a payload in an image via DCT (discrete cosine transform) "
+            "steganography — one bit per 8x8 luminance block in the mid-frequency "
+            "coefficient. Unlike LSB, this survives JPEG-style recompression at "
+            "medium/high robustness (low is fragile). Interop-compatible with the "
+            "DCT tool in the browser index.html. Writes a PNG to output_path."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Filesystem path to the carrier image."},
+                "message": {"type": "string", "description": "Payload to hide, as a UTF-8 string."},
+                "robustness": {"type": "string", "description": "low / medium / high. Higher survives more compression but is more visible. Default medium."},
+                "block_size": {"type": "integer", "description": "DCT block size. Default 8 (matches JPEG)."},
+                "output_path": {"type": "string", "description": "Where to write the encoded PNG."},
+            },
+            "required": ["path", "message"],
+        },
+    },
+    "stegg_dct_decode": {
+        "description": (
+            "Recover a payload previously hidden with stegg_dct_encode (or the browser "
+            "DCT tool). Auto-detects the robustness level from the DCTS header. Use "
+            "this instead of stegg_lsb_smart_scan when the carrier has been through "
+            "JPEG compression — LSB will be destroyed but DCT will survive."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Filesystem path to the DCT-encoded image."},
+                "block_size": {"type": "integer", "description": "DCT block size (must match encode; default 8)."},
+            },
+            "required": ["path"],
+        },
+    },
+    "stegg_dct_capacity": {
+        "description": (
+            "Pre-flight: how many payload bytes fit in an image under DCT embedding. "
+            "DCT is ~1 bit per 64 pixels (one bit per 8x8 block), so capacity is much "
+            "lower than LSB — use this before stegg_dct_encode on small carriers."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Filesystem path to the image."},
+                "block_size": {"type": "integer", "description": "DCT block size (default 8)."},
             },
             "required": ["path"],
         },

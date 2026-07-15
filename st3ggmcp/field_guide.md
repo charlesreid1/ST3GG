@@ -114,7 +114,7 @@ Corollaries:
 
 - If the user says "over Slack", assume **rendered-post canonicalization** and refuse to recommend anything that lives in metadata, emoji-attached data, or trailing bytes for image files. Steer them to PNG LSB (bytes survive Slack re-serving) or plain zero-width in the message body (paste survives if the client doesn't strip — test first).
 - If the user says "over terminal / stdout / SSH copy-paste", assume **visible-glyph canonicalization** and prefer methods that survive `pbcopy` explicitly. Warn that raw terminal copy may drop invisibles.
-- If the user says "over JPEG / WhatsApp / social", assume **perceptual re-encode** and refuse to recommend LSB at all. Steer to DCT-robust, spectral, or watermark-style hides.
+- If the user says "over JPEG / WhatsApp / social", assume **perceptual re-encode** and refuse to recommend LSB at all. Steer to DCT-robust, spectral, or watermark-style hides. `stegg_dct_encode` (with `robustness=medium` or `high`) is the built-in JPEG-survivable option — pre-flight capacity with `stegg_dct_capacity` since DCT holds ~1 bit per 64 pixels.
 - If the user does not name a transport, ASK. "How's this getting delivered?" is a real question ST3GG cares about, because the answer changes the hide.
 - If the technique's canonical layer is unknown for a given transport, say so and recommend a probe: hide a 3-byte marker, round-trip through the transport, extract, report survival. Empirical data beats folklore. See `TRANSPORT_MATRIX.md` for the running scoreboard.
 
@@ -233,6 +233,7 @@ The one refusal path is when the user asks you to analyze something and hasn't g
 | `append`, `trailing`, `after_iend`, `polyglot` | `stegg_detect_trailing`, then `stegg_carve`  |
 | `zip`, `pdf`, `tar`, `gz`, `sqlite`         | `stegg_carve`               |
 | `lsb`, `rgb`, `alpha`, `bit`                | `stegg_triage` + `stegg_lsb_smart_scan` |
+| `dct`, `jpeg_dct`, `dcts`, `frequency`      | `stegg_dct_decode` (and only fall back to LSB scans if DCT returns nothing) |
 | `zero_width`, `homoglyph`, `invisible`      | `stegg_text_steg`           |
 
 These override the "don't blast every tool" rule for the *one* tool the filename points at.

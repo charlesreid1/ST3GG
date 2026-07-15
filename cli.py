@@ -34,7 +34,8 @@ from PIL import Image
 # Import our modules
 from steg_core import (
     encode, decode, create_config, calculate_capacity, analyze_image,
-    detect_encoding, CHANNEL_PRESETS, EncodingStrategy
+    detect_encoding, CHANNEL_PRESETS, EncodingStrategy,
+    dct_encode, dct_decode, dct_capacity, DCT_STRENGTHS,
 )
 try:
     from crypto import encrypt, decrypt, get_available_methods, crypto_status
@@ -615,6 +616,140 @@ def inject_leet(
     """Convert text to leetspeak"""
     result = leetspeak(text, intensity)
     console.print(Panel(result, title="[green]Leetspeak[/green]", border_style="green"))
+
+
+# ============== DCT COMMANDS ==============
+
+class DctRobustness(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
+dct_app = typer.Typer(help="🎛  DCT steganography: frequency-domain (JPEG-survivable)")
+app.add_typer(dct_app, name="dct")
+
+
+@dct_app.command("encode")
+def dct_encode_cmd(
+    input_image: Path = typer.Option(..., "--input", "-i", help="Input carrier image"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output PNG path"),
+    text: Optional[str] = typer.Option(None, "--text", "-t", help="Text to encode"),
+    file: Optional[Path] = typer.Option(None, "--file", "-f", help="File to encode"),
+    robustness: DctRobustness = typer.Option(DctRobustness.medium, "--robustness", "-r", help="low / medium / high"),
+    block_size: int = typer.Option(8, "--block-size", help="DCT block size (default 8)"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+):
+    """🎛  Embed data via DCT (survives JPEG-style recompression at medium/high)."""
+    if not quiet:
+        print_banner(small=True)
+    if not input_image.exists():
+        error(f"Input image not found: {input_image}")
+        raise typer.Exit(1)
+    if not text and not file:
+        error("Must provide --text or --file")
+        raise typer.Exit(1)
+
+    payload = file.read_bytes() if file else text.encode("utf-8")
+    if output is None:
+        output = Path(f"steg_dct_{input_image.stem}.png")
+
+    try:
+        image = Image.open(input_image)
+    except Exception as e:
+        error(f"Failed to load image: {e}")
+        raise typer.Exit(1)
+
+    cap = dct_capacity(image, block_size=block_size)
+    if not quiet:
+        console.print(Panel(
+            f"[cyan]Capacity:[/cyan] {cap['human']}\n"
+            f"[cyan]Block size:[/cyan] {block_size}\n"
+            f"[cyan]Robustness:[/cyan] {robustness.value} (strength={DCT_STRENGTHS[robustness.value]})\n"
+            f"[cyan]Payload:[/cyan] {len(payload):,} bytes",
+            title="[green]DCT Configuration[/green]",
+            border_style="green",
+        ))
+
+    if len(payload) > cap["usable_bytes"]:
+        error(f"Payload too large! {len(payload):,} bytes > {cap['usable_bytes']:,} available")
+        raise typer.Exit(1)
+
+    try:
+        dct_encode(image, payload, robustness=robustness.value, block_size=block_size, output_path=str(output))
+    except Exception as e:
+        error(f"DCT encoding failed: {e}")
+        raise typer.Exit(1)
+
+    success(f"DCT-encoded {len(payload):,} bytes → {output}")
+    if not quiet:
+        console.print(f"\n{FOOTER}")
+
+
+@dct_app.command("decode")
+def dct_decode_cmd(
+    input_image: Path = typer.Option(..., "--input", "-i", help="DCT-encoded image"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write recovered bytes here"),
+    block_size: int = typer.Option(8, "--block-size", help="DCT block size (default 8)"),
+    raw: bool = typer.Option(False, "--raw", help="Output raw bytes (hex)"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+):
+    """🔎 Recover a payload previously hidden with `steg dct encode`."""
+    if not quiet:
+        print_banner(small=True)
+    if not input_image.exists():
+        error(f"Image not found: {input_image}")
+        raise typer.Exit(1)
+
+    try:
+        image = Image.open(input_image)
+    except Exception as e:
+        error(f"Failed to load image: {e}")
+        raise typer.Exit(1)
+
+    try:
+        data = dct_decode(image, block_size=block_size)
+    except Exception as e:
+        error(f"DCT decoding failed: {e}")
+        raise typer.Exit(1)
+
+    success(f"Extracted {len(data):,} bytes via DCT")
+
+    if output:
+        output.write_bytes(data)
+        success(f"Saved to: {output}")
+    elif raw:
+        console.print(Panel(data.hex(), title="[cyan]Raw Data (hex)[/cyan]", border_style="cyan"))
+    else:
+        try:
+            console.print(Panel(data.decode("utf-8"), title=f"{STATUS['decode']} [cyan]Decoded Message[/cyan]",
+                                border_style="cyan", box=box.DOUBLE))
+        except UnicodeDecodeError:
+            warning("Data is not valid UTF-8, showing hex preview:")
+            console.print(Panel(data[:500].hex() + ("..." if len(data) > 500 else ""),
+                                title="[yellow]Binary Data (hex preview)[/yellow]", border_style="yellow"))
+
+    if not quiet:
+        console.print(f"\n{FOOTER}")
+
+
+@dct_app.command("capacity")
+def dct_capacity_cmd(
+    input_image: Path = typer.Option(..., "--input", "-i", help="Image to measure"),
+    block_size: int = typer.Option(8, "--block-size", help="DCT block size (default 8)"),
+):
+    """📏 Report how many payload bytes fit under DCT."""
+    if not input_image.exists():
+        error(f"Image not found: {input_image}")
+        raise typer.Exit(1)
+    image = Image.open(input_image)
+    cap = dct_capacity(image, block_size=block_size)
+    table = Table(show_header=False, box=box.SIMPLE)
+    table.add_column("Field", style="cyan")
+    table.add_column("Value")
+    for k, v in cap.items():
+        table.add_row(k, str(v))
+    console.print(Panel(table, title="[cyan]DCT capacity[/cyan]", border_style="cyan"))
 
 
 # ============== TEXT STEG COMMANDS ==============
