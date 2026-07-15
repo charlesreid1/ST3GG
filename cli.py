@@ -38,6 +38,19 @@ from img_core import (
     dct_encode, dct_decode, dct_capacity, DCT_STRENGTHS,
 )
 try:
+    from specter import (
+        specter_lsb_encode, specter_lsb_decode,
+        specter_dct_encode, specter_dct_decode,
+        parse_pattern, pattern_from_password,
+        SPECTER_DCT_REDUNDANCY, SPECTER_DCT_STRENGTH,
+    )
+except Exception:
+    specter_lsb_encode = specter_lsb_decode = None  # type: ignore[assignment]
+    specter_dct_encode = specter_dct_decode = None  # type: ignore[assignment]
+    parse_pattern = pattern_from_password = None  # type: ignore[assignment]
+    SPECTER_DCT_REDUNDANCY = 5
+    SPECTER_DCT_STRENGTH = 50
+try:
     from crypto import encrypt, decrypt, get_available_methods, crypto_status
 except Exception:
     # Gracefully handle broken cryptography library (e.g., broken system install)
@@ -883,6 +896,203 @@ def info_cmd():
     ))
 
     console.print(f"\n{FOOTER}")
+
+
+# ============== SPECTER CHANNEL CIPHER ==============
+
+specter_app = typer.Typer(help="🔄 SPECTER channel-cipher steganography (cross-channel hopping)")
+app.add_typer(specter_app, name="specter")
+
+
+@specter_app.command("encode")
+def specter_encode_cmd(
+    input_image: Path = typer.Option(..., "--input", "-i", help="Input carrier image"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output image path"),
+    text: Optional[str] = typer.Option(None, "--text", "-t", help="Text to encode"),
+    file: Optional[Path] = typer.Option(None, "--file", "-f", help="File to encode"),
+    pattern: Optional[str] = typer.Option(None, "--pattern", help="Manual pattern like R1-G2-B1"),
+    password: Optional[str] = typer.Option(None, "--password", "-p", help="Password-derived pattern"),
+    embed_mode: str = typer.Option("lsb", "--mode", "-m", help="Embedding mode: lsb or dct"),
+    encrypt: bool = typer.Option(False, "--encrypt/--no-encrypt", help="XOR-encrypt the payload"),
+    ghost: bool = typer.Option(False, "--ghost", help="Enable Ghost Mode (AES-256-GCM + scramble + noise)"),
+    density: int = typer.Option(100, "--density", "-d", help="Embedding density 1-100"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+):
+    """🔄 Embed data using SPECTER channel-hopping cipher.
+
+    Examples:
+        steg specter encode -i photo.png -t "secret" --pattern R1-G2-B1 -o out.png
+        steg specter encode -i photo.png -t "secret" --password mypass -o out.png
+        steg specter encode -i photo.png -t "secret" --password mypass --ghost -o ghost.png
+        steg specter encode -i photo.png -t "secret" --pattern R1-G2-B1 --mode dct -o dct.png
+    """
+    if not quiet:
+        print_banner(small=True)
+
+    if not input_image.exists():
+        error(f"Input image not found: {input_image}")
+        raise typer.Exit(1)
+
+    if not text and not file:
+        error("Must provide --text or --file")
+        raise typer.Exit(1)
+
+    if not pattern and not password:
+        error("Must provide --pattern or --password")
+        raise typer.Exit(1)
+
+    if embed_mode not in ("lsb", "dct"):
+        error("--mode must be 'lsb' or 'dct'")
+        raise typer.Exit(1)
+
+    if ghost and embed_mode != "lsb":
+        error("Ghost Mode is only available with --mode lsb")
+        raise typer.Exit(1)
+
+    if ghost and not password:
+        error("Ghost Mode requires --password")
+        raise typer.Exit(1)
+
+    payload = file.read_bytes() if file else text.encode("utf-8")
+
+    # Resolve pattern
+    if pattern:
+        steps = parse_pattern(pattern)
+        if steps is None:
+            error(f"Invalid pattern: {pattern}")
+            raise typer.Exit(1)
+        cipher_key = pattern
+    else:
+        steps = pattern_from_password(password)
+        cipher_key = password
+
+    try:
+        image = Image.open(input_image)
+    except Exception as e:
+        error(f"Failed to load image: {e}")
+        raise typer.Exit(1)
+
+    if output is None:
+        suffix = "_ghost" if ghost else "_specter"
+        output = Path(f"steg{suffix}_{input_image.stem}.png")
+
+    if not quiet:
+        step_names = " → ".join(s.name for s in steps)
+        console.print(Panel(
+            f"[cyan]Mode:[/cyan] {embed_mode.upper()}\n"
+            f"[cyan]Pattern:[/cyan] {step_names}\n"
+            f"[cyan]Steps:[/cyan] {len(steps)}\n"
+            f"[cyan]Payload:[/cyan] {len(payload):,} bytes\n"
+            f"[cyan]Encrypt:[/cyan] {'Ghost (AES-256-GCM)' if ghost else 'XOR' if encrypt else 'None'}\n"
+            f"[cyan]Density:[/cyan] {density}%",
+            title="[green]SPECTER Configuration[/green]",
+            border_style="green",
+        ))
+
+    try:
+        if embed_mode == "dct":
+            specter_dct_encode(
+                image, payload, steps,
+                encrypt=encrypt, key=cipher_key if encrypt else "",
+                output_path=str(output),
+            )
+        else:
+            specter_lsb_encode(
+                image, payload, steps,
+                encrypt=encrypt and not ghost,
+                key=password or "",
+                density=density,
+                ghost=ghost,
+                output_path=str(output),
+            )
+    except Exception as e:
+        error(f"SPECTER encoding failed: {e}")
+        raise typer.Exit(1)
+
+    success(f"SPECTER-encoded {len(payload):,} bytes → {output}")
+    if not quiet:
+        console.print(f"\n{FOOTER}")
+
+
+@specter_app.command("decode")
+def specter_decode_cmd(
+    input_image: Path = typer.Option(..., "--input", "-i", help="SPECTER-encoded image"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write recovered bytes here"),
+    cipher_key: str = typer.Option(..., "--key", "-k", help="Pattern or password used for encoding"),
+    password: Optional[str] = typer.Option(None, "--password", "-p", help="Decryption password (for Ghost Mode)"),
+    raw: bool = typer.Option(False, "--raw", help="Output raw bytes (hex)"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+):
+    """🔎 Recover data hidden with `steg specter encode`.
+
+    Examples:
+        steg specter decode -i hidden.png --key R1-G2-B1
+        steg specter decode -i hidden.png --key mypassword
+        steg specter decode -i ghost.png --key mypassword --password mypassword
+    """
+    if not quiet:
+        print_banner(small=True)
+
+    if not input_image.exists():
+        error(f"Image not found: {input_image}")
+        raise typer.Exit(1)
+
+    try:
+        image = Image.open(input_image)
+    except Exception as e:
+        error(f"Failed to load image: {e}")
+        raise typer.Exit(1)
+
+    # Try to resolve the cipher key as a pattern first, then as password
+    steps = parse_pattern(cipher_key)
+    if steps is None:
+        steps = pattern_from_password(cipher_key)
+
+    decrypt_key = password or cipher_key
+
+    # Try LSB decode first, fall back to DCT
+    data = None
+    mode_used = None
+
+    try:
+        data = specter_lsb_decode(image, steps, key=decrypt_key)
+        mode_used = "LSB"
+        if not quiet:
+            info("Detected SPECTER LSB encoding")
+    except ValueError:
+        pass
+
+    if data is None:
+        try:
+            data = specter_dct_decode(image, steps, key=decrypt_key)
+            mode_used = "DCT"
+            if not quiet:
+                info("Detected SPECTER DCT encoding")
+        except ValueError:
+            pass
+
+    if data is None:
+        error("No SPECTER data found. Verify --key matches the encoding pattern/password.")
+        raise typer.Exit(1)
+
+    success(f"Extracted {len(data):,} bytes via SPECTER ({mode_used})")
+
+    if output:
+        output.write_bytes(data)
+        success(f"Saved to: {output}")
+    elif raw:
+        console.print(Panel(data.hex(), title="[cyan]Raw Data (hex)[/cyan]", border_style="cyan"))
+    else:
+        try:
+            console.print(Panel(data.decode("utf-8"), title=f"{STATUS['decode']} [cyan]Decoded Message[/cyan]",
+                                border_style="cyan", box=box.DOUBLE))
+        except UnicodeDecodeError:
+            warning("Data is not valid UTF-8, showing hex preview:")
+            console.print(Panel(data[:500].hex() + ("..." if len(data) > 500 else ""),
+                                title="[yellow]Binary Data (hex preview)[/yellow]", border_style="yellow"))
+
+    if not quiet:
+        console.print(f"\n{FOOTER}")
 
 
 # Entry point

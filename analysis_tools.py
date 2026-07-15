@@ -3089,4 +3089,11 @@ def _register_all_tools():
     TOOL_REGISTRY.register('decode_math_alphanumeric', decode_math_alphanumeric)
     TOOL_REGISTRY.register('decode_emoji_skin_tone', decode_emoji_skin_tone)
 
+    # SPECTER channel-cipher detection
+    try:
+        from specter import specter_detect as _specter_detect
+        TOOL_REGISTRY.register('godmode_detect', _specter_detect)
+    except Exception:
+        pass
+
 _register_all_tools()
