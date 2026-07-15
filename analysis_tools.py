@@ -1712,7 +1712,11 @@ def png_filter_analysis(data: bytes) -> Dict[str, Any]:
 
 
 def png_detect_embedded_png(data: bytes) -> Dict[str, Any]:
-    """Detect PNG files embedded within PNG (nested steganography)"""
+    """Detect PNG files embedded within PNG (nested steganography).
+
+    Each embedded PNG is also checked for STEG headers to identify
+    Matryoshka-style recursive steganography.
+    """
     results = {
         'found': False,
         'embedded_pngs': []
@@ -1734,11 +1738,20 @@ def png_detect_embedded_png(data: bytes) -> Dict[str, Any]:
                 end_pos += 12
                 embedded_size = end_pos - pos
 
-                results['embedded_pngs'].append({
+                entry = {
                     'offset': pos,
                     'size': embedded_size,
                     'location': 'after_iend' if pos > data.rfind(b'IEND', 0, pos) else 'within_image'
-                })
+                }
+
+                # Check for Matryoshka: does the embedded PNG contain a STEG header?
+                embedded_data = data[pos:end_pos]
+                if _has_steg_header(embedded_data):
+                    entry['nested_matryoshka'] = True
+                    # Quick depth estimate: count embedded STEG headers
+                    entry['matryoshka_depth_estimate'] = _count_nested_steg_headers(embedded_data) + 1
+
+                results['embedded_pngs'].append(entry)
                 results['found'] = True
         except:
             pass
@@ -1749,6 +1762,78 @@ def png_detect_embedded_png(data: bytes) -> Dict[str, Any]:
     results['suspicious'] = results['found']
 
     return results
+
+
+def _has_steg_header(png_data: bytes) -> bool:
+    """Check if PNG data likely contains a STEG header."""
+    # The STEG header is embedded in the LSBs of the image pixels,
+    # not in the PNG file structure itself.  We look for the 'STEG'
+    # magic bytes in the raw file bytes as a heuristic.
+    return b'STEG' in png_data
+
+
+def _count_nested_steg_headers(png_data: bytes) -> int:
+    """Count occurrences of 'STEG' magic in PNG data (heuristic depth)."""
+    return png_data.count(b'STEG')
+
+
+def smart_scan_recursive(image_data: bytes, max_depth: int = 11,
+                         password: Optional[str] = None) -> Dict[str, Any]:
+    """Recursively scan an image for Matryoshka-style nested steganography.
+
+    Uses ``matryoshka_core.decode_nested`` to recursively unwrap layers,
+    falling back to the static PNG-embedded-PNG detector when the image
+    cannot be decoded as a STEG container.
+
+    Args:
+        image_data: Raw bytes of the image file (PNG recommended).
+        max_depth: Maximum recursion depth.
+        password: Optional decryption password.
+
+    Returns:
+        A dict with ``layers_found``, ``nested_depth``, and a ``layers``
+        list describing each discovered layer.
+    """
+    try:
+        from matryoshka_core import decode_nested, MatryoshkaConfig, is_image_data
+        from PIL import Image as PILImage
+    except ImportError:
+        return {'error': 'matryoshka_core or PIL not available'}
+
+    try:
+        img = PILImage.open(io.BytesIO(image_data))
+    except Exception as exc:
+        return {'error': f'Failed to open image: {exc}'}
+
+    config = MatryoshkaConfig(max_depth=max_depth, password=password)
+    layers = decode_nested(img, config)
+
+    # Flatten the nested tree for reporting
+    def flatten(dl_list, flat_out):
+        for dl in dl_list:
+            flat_out.append({
+                'depth': dl.depth,
+                'type': dl.type,
+                'filename': dl.filename,
+                'data_size': dl.data_size,
+                'preview': dl.preview[:200] if dl.preview else '',
+                'has_nested': bool(dl.nested),
+            })
+            if dl.nested:
+                flatten(dl.nested, flat_out)
+
+    flat = []
+    flatten(layers, flat)
+
+    # Determine nested depth
+    nested_depth = max((l['depth'] for l in flat), default=0)
+
+    return {
+        'layers_found': len(flat),
+        'nested_depth': nested_depth,
+        'is_matryoshka': nested_depth > 0,
+        'layers': flat,
+    }
 
 
 def png_color_histogram_analysis(data: bytes) -> Dict[str, Any]:
@@ -3102,6 +3187,13 @@ def _register_all_tools():
         TOOL_REGISTRY.register('detect_jailbreak_payload', detect_jailbreak_payload_bytes)
         TOOL_REGISTRY.register('jailbreak_full_scan', detect_full_injection_package_bytes)
     except ImportError:
+        pass
+
+    # SPECTER channel-cipher detection
+    try:
+        from specter import specter_detect as _specter_detect
+        TOOL_REGISTRY.register('godmode_detect', _specter_detect)
+    except Exception:
         pass
 
 _register_all_tools()

@@ -15,7 +15,7 @@ import sys
 import time
 import typer
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from enum import Enum
 
 from rich.console import Console
@@ -38,6 +38,19 @@ from img_core import (
     dct_encode, dct_decode, dct_capacity, DCT_STRENGTHS,
 )
 try:
+    from specter import (
+        specter_lsb_encode, specter_lsb_decode,
+        specter_dct_encode, specter_dct_decode,
+        parse_pattern, pattern_from_password,
+        SPECTER_DCT_REDUNDANCY, SPECTER_DCT_STRENGTH,
+    )
+except Exception:
+    specter_lsb_encode = specter_lsb_decode = None  # type: ignore[assignment]
+    specter_dct_encode = specter_dct_decode = None  # type: ignore[assignment]
+    parse_pattern = pattern_from_password = None  # type: ignore[assignment]
+    SPECTER_DCT_REDUNDANCY = 5
+    SPECTER_DCT_STRENGTH = 50
+try:
     from crypto import encrypt, decrypt, get_available_methods, crypto_status
 except Exception:
     # Gracefully handle broken cryptography library (e.g., broken system install)
@@ -53,6 +66,10 @@ from injector import zalgo_text, leetspeak
 from ascii_art import (
     BANNER, BANNER_SMALL, STEGOSAURUS_ASCII_SIMPLE, STEGOSAURUS_SMALL,
     STATUS, FOOTER, TAGLINES, section_header, channel_bar, COLORS
+)
+from matryoshka_core import (
+    MatryoshkaConfig, encode_nested, decode_nested, capacity_for,
+    plan_nesting, is_image_data, DecodeLayer, LayerReport,
 )
 
 # Initialize
@@ -422,6 +439,8 @@ def decode_cmd(
 def analyze(
     input_image: Path = typer.Argument(..., help="Image to analyze"),
     full: bool = typer.Option(False, "--full", "-f", help="Full analysis with all channels"),
+    recursive: bool = typer.Option(False, "--recursive", "-r", "--matryoshka",
+                                   help="Recursively scan for Matryoshka nested stego"),
 ):
     """
     🔍 Analyze an image for steganographic content
@@ -532,7 +551,56 @@ def analyze(
         )
 
     console.print(verdict)
+
+    # Recursive / Matryoshka scan
+    if recursive:
+        console.print()
+        _run_recursive_scan(input_image)
+
     console.print(f"\n{FOOTER}")
+
+
+def _run_recursive_scan(image_path: Path):
+    """Run smart_scan_recursive on an image and print results."""
+    try:
+        from analysis_tools import smart_scan_recursive
+    except ImportError:
+        warning("analysis_tools.smart_scan_recursive not available")
+        return
+
+    with console.status("[magenta]🪆 Recursive Matryoshka scan...[/magenta]", spinner="dots"):
+        result = smart_scan_recursive(image_path.read_bytes())
+
+    if result.get("error"):
+        warning(f"Recursive scan failed: {result['error']}")
+        return
+
+    if not result.get("is_matryoshka"):
+        info("🪆 No nested stego layers detected")
+        return
+
+    depth = result["nested_depth"]
+    count = result["layers_found"]
+
+    table = Table(
+        title=f"🪆 Matryoshka Scan — {count} layers, max depth {depth}",
+        box=box.ROUNDED,
+    )
+    table.add_column("Depth", style="cyan", justify="right")
+    table.add_column("Type", style="magenta")
+    table.add_column("Size", style="green", justify="right")
+    table.add_column("Preview", style="white")
+
+    for layer in result["layers"]:
+        preview = layer["preview"][:80] if layer["preview"] else ""
+        table.add_row(
+            str(layer["depth"]),
+            layer["type"],
+            f"{layer['data_size']:,} B" if layer["data_size"] else "",
+            preview,
+        )
+
+    console.print(table)
 
 
 # ============== INJECT COMMAND ==============
@@ -906,6 +974,272 @@ def text_capacity_cmd(
     console.print(Panel(table, title=f"[cyan]capacity: {method}[/cyan]", border_style="cyan"))
 
 
+# ============== 🪆 MATRYOSHKA COMMANDS ==============
+
+matryoshka_app = typer.Typer(
+    name="matryoshka",
+    help="🪆 Matryoshka nested-image steganography (Russian nesting dolls)",
+    rich_markup_mode="rich",
+)
+app.add_typer(matryoshka_app)
+
+
+def _load_carriers(paths: List[Path]) -> List[Tuple[Image.Image, str]]:
+    """Load carrier images from paths. Returns innermost-first list."""
+    carriers = []
+    for p in paths:
+        if not p.exists():
+            error(f"Carrier image not found: {p}")
+            raise typer.Exit(1)
+        img = Image.open(p).convert("RGBA")
+        carriers.append((img, p.name))
+    # CLI accepts outermost-first; reverse to innermost-first
+    carriers.reverse()
+    return carriers
+
+
+def _print_layer_tree(layers: List[DecodeLayer], indent: int = 0):
+    """Pretty-print a nested decode layer tree."""
+    prefix = "  " * indent
+    for layer in layers:
+        type_icon = {
+            "steg_header": "📦",
+            "nested_image": "🪆",
+            "nested_image_raw": "🪆",
+            "file": "📁",
+            "text": "📝",
+            "binary": "⚫",
+            "no_data_found": "❌",
+            "max_depth_reached": "⚠️",
+            "error": "💥",
+        }.get(layer.type, "❓")
+
+        name_part = f" [{layer.filename}]" if layer.filename else ""
+        size_part = f" ({layer.data_size:,} B)" if layer.data_size else ""
+        print(f"{prefix}{type_icon} L{layer.depth} [{layer.type}]{name_part}{size_part}")
+        if layer.preview and layer.type not in ("nested_image", "nested_image_raw"):
+            preview_short = layer.preview[:120].replace("\n", " ")
+            print(f"{prefix}   {preview_short}")
+        if layer.nested:
+            _print_layer_tree(layer.nested, indent + 1)
+
+
+@matryoshka_app.command()
+def encode(
+    payload_path: Path = typer.Option(
+        ..., "--payload", "-p", help="File to hide (innermost secret)"
+    ),
+    carriers: List[Path] = typer.Option(
+        ..., "--carrier", "-c", help="Carrier image (outermost first; repeatable)"
+    ),
+    output: Path = typer.Option(
+        None, "--output", "-o", help="Output image path"
+    ),
+    password: Optional[str] = typer.Option(
+        None, "--password", "-w", help="Encryption password (innermost layer only)"
+    ),
+    channels: str = typer.Option(
+        "RGBA", "--channels", help="Channel preset (R, G, B, A, RGB, RGBA, etc.)"
+    ),
+    bits: int = typer.Option(
+        2, "--bits", "-b", help="Bits per channel (1-8)", min=1, max=8
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print capacity plan only, do not encode"
+    ),
+):
+    """
+    🪆 Encode a payload into a stack of carrier images.
+
+    Carriers are specified outermost-first (matching the mental model) and
+    reversed internally to innermost-first for the encoding engine.
+
+    Examples:
+        stegg matryoshka encode -p secret.txt -c inner.png -c outer.png -o nested.png
+        stegg matryoshka encode -p data.bin -c a.png -c b.png -c c.png --dry-run
+    """
+    if not carriers:
+        error("At least one --carrier is required")
+        raise typer.Exit(1)
+
+    if not payload_path.exists():
+        error(f"Payload file not found: {payload_path}")
+        raise typer.Exit(1)
+
+    payload = payload_path.read_bytes()
+    info(f"Payload: {payload_path} ({len(payload):,} bytes)")
+
+    carrier_tuples = _load_carriers(carriers)
+    info(f"Carriers: {len(carrier_tuples)} layers (outermost-first on CLI)")
+
+    config = MatryoshkaConfig(
+        channels=channels, bits=bits, password=password,
+        max_depth=max(len(carrier_tuples), 11),
+    )
+
+    if dry_run:
+        info("Dry-run mode — capacity plan only")
+        plan = plan_nesting(len(payload), carrier_tuples, config, mode="estimate")
+        _print_plan(plan)
+        return
+
+    try:
+        result_img, reports = encode_nested(payload, carrier_tuples, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1)
+
+    if output is None:
+        output = Path("matryoshka_encoded.png")
+
+    result_img.save(output, format="PNG")
+    success(f"Encoded {len(reports)} layers → {output}")
+    _print_plan(reports)
+
+
+def _print_plan(reports: List[LayerReport]):
+    """Print a capacity plan / layer report table."""
+    table = Table(title="🪆 Layer Plan", box=box.ROUNDED)
+    table.add_column("Layer", style="cyan", justify="right")
+    table.add_column("Carrier", style="magenta")
+    table.add_column("Capacity", style="green", justify="right")
+    table.add_column("Payload", style="yellow", justify="right")
+    table.add_column("Fits", justify="center")
+    table.add_column("Output", style="blue", justify="right")
+
+    for r in reports:
+        fits_icon = "✅" if r.fits else "❌"
+        output_str = _format_size_cli(r.output_size) if isinstance(r.output_size, int) else str(r.output_size)
+        table.add_row(
+            str(r.layer),
+            r.carrier_name,
+            _format_size_cli(r.capacity),
+            _format_size_cli(r.payload_size),
+            fits_icon,
+            output_str,
+        )
+    console.print(table)
+
+
+def _format_size_cli(size_bytes: int | str) -> str:
+    """Format bytes for CLI display."""
+    if isinstance(size_bytes, str):
+        return size_bytes
+    for unit in ["B", "KB", "MB", "GB"]:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
+
+
+@matryoshka_app.command()
+def decode(
+    image: Path = typer.Argument(..., help="Image to recursively decode"),
+    password: Optional[str] = typer.Option(
+        None, "--password", "-w", help="Decryption password"
+    ),
+    max_depth: int = typer.Option(
+        11, "--max-depth", "-d", help="Maximum recursion depth (1-11)", min=1, max=11
+    ),
+    extract_dir: Optional[Path] = typer.Option(
+        None, "--extract-dir", "-e", help="Write each layer's raw data to files"
+    ),
+):
+    """
+    🪆 Recursively decode a Matryoshka-encoded image.
+
+    Prints a depth-indented tree of discovered layers.  Use --extract-dir
+    to write each layer's raw data to disk.
+
+    Examples:
+        stegg matryoshka decode nested.png
+        stegg matryoshka decode nested.png -d 5 -e ./layers/
+    """
+    if not image.exists():
+        error(f"Image not found: {image}")
+        raise typer.Exit(1)
+
+    img = Image.open(image).convert("RGBA")
+    info(f"Decoding: {image} ({img.size[0]}x{img.size[1]})")
+
+    config = MatryoshkaConfig(max_depth=max_depth, password=password)
+    layers = decode_nested(img, config)
+
+    if not layers:
+        warning("No layers found")
+        return
+
+    print(f"\n🪆  Matryoshka decode — {image.name}")
+    _print_layer_tree(layers)
+
+    # Extract files if requested
+    if extract_dir:
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        _extract_layers(layers, extract_dir)
+
+
+def _extract_layers(layers: List[DecodeLayer], out_dir: Path, prefix: str = ""):
+    """Write DecodeLayer raw_data to disk."""
+    for layer in layers:
+        if layer.raw_data:
+            name = layer.filename or f"layer{layer.depth}.bin"
+            fname = f"{prefix}{name}"
+            out_path = out_dir / fname
+            out_path.write_bytes(layer.raw_data)
+            info(f"  Extracted: {out_path}")
+        if layer.nested:
+            _extract_layers(layer.nested, out_dir, f"{prefix}L{layer.depth}_")
+
+
+@matryoshka_app.command()
+def plan(
+    payload_size: int = typer.Argument(..., help="Size of innermost payload in bytes"),
+    carriers: List[Path] = typer.Option(
+        ..., "--carrier", "-c", help="Carrier image (outermost first; repeatable)"
+    ),
+    channels: str = typer.Option(
+        "RGBA", "--channels", help="Channel preset"
+    ),
+    bits: int = typer.Option(
+        2, "--bits", "-b", help="Bits per channel (1-8)", min=1, max=8
+    ),
+    exact: bool = typer.Option(
+        False, "--exact", help="Actually encode to measure exact PNG sizes (slow)"
+    ),
+):
+    """
+    📐 Plan a Matryoshka nesting without encoding.
+
+    Walks the carrier stack and predicts whether each layer has enough
+    capacity for the expected payload (original data for innermost,
+    serialised PNG for intermediate layers).
+
+    Examples:
+        stegg matryoshka plan 4096 -c a.png -c b.png -c c.png
+        stegg matryoshka plan 1024 -c a.png -c b.png --exact
+    """
+    if not carriers:
+        error("At least one --carrier is required")
+        raise typer.Exit(1)
+
+    carrier_tuples = _load_carriers(carriers)
+    config = MatryoshkaConfig(channels=channels, bits=bits)
+
+    mode = "exact" if exact else "estimate"
+    info(f"Planning {len(carrier_tuples)} layers for {payload_size:,}B payload (mode={mode})")
+
+    reports = plan_nesting(payload_size, carrier_tuples, config, mode=mode)
+    _print_plan(reports)
+
+    all_fit = all(r.fits for r in reports)
+    if all_fit:
+        success("All layers fit! ✓")
+    else:
+        first_bad = next(r for r in reports if not r.fits)
+        error(f"Overflow at layer {first_bad.layer} ({first_bad.carrier_name}): "
+              f"need {first_bad.payload_size:,}B, have {first_bad.capacity:,}B")
+
+
 # ============== INFO COMMAND ==============
 
 @app.command()
@@ -950,6 +1284,203 @@ def info_cmd():
     ))
 
     console.print(f"\n{FOOTER}")
+
+
+# ============== SPECTER CHANNEL CIPHER ==============
+
+specter_app = typer.Typer(help="🔄 SPECTER channel-cipher steganography (cross-channel hopping)")
+app.add_typer(specter_app, name="specter")
+
+
+@specter_app.command("encode")
+def specter_encode_cmd(
+    input_image: Path = typer.Option(..., "--input", "-i", help="Input carrier image"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output image path"),
+    text: Optional[str] = typer.Option(None, "--text", "-t", help="Text to encode"),
+    file: Optional[Path] = typer.Option(None, "--file", "-f", help="File to encode"),
+    pattern: Optional[str] = typer.Option(None, "--pattern", help="Manual pattern like R1-G2-B1"),
+    password: Optional[str] = typer.Option(None, "--password", "-p", help="Password-derived pattern"),
+    embed_mode: str = typer.Option("lsb", "--mode", "-m", help="Embedding mode: lsb or dct"),
+    encrypt: bool = typer.Option(False, "--encrypt/--no-encrypt", help="XOR-encrypt the payload"),
+    ghost: bool = typer.Option(False, "--ghost", help="Enable Ghost Mode (AES-256-GCM + scramble + noise)"),
+    density: int = typer.Option(100, "--density", "-d", help="Embedding density 1-100"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+):
+    """🔄 Embed data using SPECTER channel-hopping cipher.
+
+    Examples:
+        steg specter encode -i photo.png -t "secret" --pattern R1-G2-B1 -o out.png
+        steg specter encode -i photo.png -t "secret" --password mypass -o out.png
+        steg specter encode -i photo.png -t "secret" --password mypass --ghost -o ghost.png
+        steg specter encode -i photo.png -t "secret" --pattern R1-G2-B1 --mode dct -o dct.png
+    """
+    if not quiet:
+        print_banner(small=True)
+
+    if not input_image.exists():
+        error(f"Input image not found: {input_image}")
+        raise typer.Exit(1)
+
+    if not text and not file:
+        error("Must provide --text or --file")
+        raise typer.Exit(1)
+
+    if not pattern and not password:
+        error("Must provide --pattern or --password")
+        raise typer.Exit(1)
+
+    if embed_mode not in ("lsb", "dct"):
+        error("--mode must be 'lsb' or 'dct'")
+        raise typer.Exit(1)
+
+    if ghost and embed_mode != "lsb":
+        error("Ghost Mode is only available with --mode lsb")
+        raise typer.Exit(1)
+
+    if ghost and not password:
+        error("Ghost Mode requires --password")
+        raise typer.Exit(1)
+
+    payload = file.read_bytes() if file else text.encode("utf-8")
+
+    # Resolve pattern
+    if pattern:
+        steps = parse_pattern(pattern)
+        if steps is None:
+            error(f"Invalid pattern: {pattern}")
+            raise typer.Exit(1)
+        cipher_key = pattern
+    else:
+        steps = pattern_from_password(password)
+        cipher_key = password
+
+    try:
+        image = Image.open(input_image)
+    except Exception as e:
+        error(f"Failed to load image: {e}")
+        raise typer.Exit(1)
+
+    if output is None:
+        suffix = "_ghost" if ghost else "_specter"
+        output = Path(f"steg{suffix}_{input_image.stem}.png")
+
+    if not quiet:
+        step_names = " → ".join(s.name for s in steps)
+        console.print(Panel(
+            f"[cyan]Mode:[/cyan] {embed_mode.upper()}\n"
+            f"[cyan]Pattern:[/cyan] {step_names}\n"
+            f"[cyan]Steps:[/cyan] {len(steps)}\n"
+            f"[cyan]Payload:[/cyan] {len(payload):,} bytes\n"
+            f"[cyan]Encrypt:[/cyan] {'Ghost (AES-256-GCM)' if ghost else 'XOR' if encrypt else 'None'}\n"
+            f"[cyan]Density:[/cyan] {density}%",
+            title="[green]SPECTER Configuration[/green]",
+            border_style="green",
+        ))
+
+    try:
+        if embed_mode == "dct":
+            specter_dct_encode(
+                image, payload, steps,
+                encrypt=encrypt, key=cipher_key if encrypt else "",
+                output_path=str(output),
+            )
+        else:
+            specter_lsb_encode(
+                image, payload, steps,
+                encrypt=encrypt and not ghost,
+                key=password or "",
+                density=density,
+                ghost=ghost,
+                output_path=str(output),
+            )
+    except Exception as e:
+        error(f"SPECTER encoding failed: {e}")
+        raise typer.Exit(1)
+
+    success(f"SPECTER-encoded {len(payload):,} bytes → {output}")
+    if not quiet:
+        console.print(f"\n{FOOTER}")
+
+
+@specter_app.command("decode")
+def specter_decode_cmd(
+    input_image: Path = typer.Option(..., "--input", "-i", help="SPECTER-encoded image"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write recovered bytes here"),
+    cipher_key: str = typer.Option(..., "--key", "-k", help="Pattern or password used for encoding"),
+    password: Optional[str] = typer.Option(None, "--password", "-p", help="Decryption password (for Ghost Mode)"),
+    raw: bool = typer.Option(False, "--raw", help="Output raw bytes (hex)"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
+):
+    """🔎 Recover data hidden with `steg specter encode`.
+
+    Examples:
+        steg specter decode -i hidden.png --key R1-G2-B1
+        steg specter decode -i hidden.png --key mypassword
+        steg specter decode -i ghost.png --key mypassword --password mypassword
+    """
+    if not quiet:
+        print_banner(small=True)
+
+    if not input_image.exists():
+        error(f"Image not found: {input_image}")
+        raise typer.Exit(1)
+
+    try:
+        image = Image.open(input_image)
+    except Exception as e:
+        error(f"Failed to load image: {e}")
+        raise typer.Exit(1)
+
+    # Try to resolve the cipher key as a pattern first, then as password
+    steps = parse_pattern(cipher_key)
+    if steps is None:
+        steps = pattern_from_password(cipher_key)
+
+    decrypt_key = password or cipher_key
+
+    # Try LSB decode first, fall back to DCT
+    data = None
+    mode_used = None
+
+    try:
+        data = specter_lsb_decode(image, steps, key=decrypt_key)
+        mode_used = "LSB"
+        if not quiet:
+            info("Detected SPECTER LSB encoding")
+    except ValueError:
+        pass
+
+    if data is None:
+        try:
+            data = specter_dct_decode(image, steps, key=decrypt_key)
+            mode_used = "DCT"
+            if not quiet:
+                info("Detected SPECTER DCT encoding")
+        except ValueError:
+            pass
+
+    if data is None:
+        error("No SPECTER data found. Verify --key matches the encoding pattern/password.")
+        raise typer.Exit(1)
+
+    success(f"Extracted {len(data):,} bytes via SPECTER ({mode_used})")
+
+    if output:
+        output.write_bytes(data)
+        success(f"Saved to: {output}")
+    elif raw:
+        console.print(Panel(data.hex(), title="[cyan]Raw Data (hex)[/cyan]", border_style="cyan"))
+    else:
+        try:
+            console.print(Panel(data.decode("utf-8"), title=f"{STATUS['decode']} [cyan]Decoded Message[/cyan]",
+                                border_style="cyan", box=box.DOUBLE))
+        except UnicodeDecodeError:
+            warning("Data is not valid UTF-8, showing hex preview:")
+            console.print(Panel(data[:500].hex() + ("..." if len(data) > 500 else ""),
+                                title="[yellow]Binary Data (hex preview)[/yellow]", border_style="yellow"))
+
+    if not quiet:
+        console.print(f"\n{FOOTER}")
 
 
 # Entry point
