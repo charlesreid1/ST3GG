@@ -14,6 +14,11 @@ Classic techniques:
                    length prefix + payload bits.
   - invisible_ink: U+E0000 start tag, ASCII -> tag-char body (code+base),
                    U+E007F end tag. Spliced after the first cover char.
+                   This is the *general* Unicode Tag carrier and accepts
+                   any ASCII byte. See
+                   `jailbreak_core.compose_unicode_tag_jailbreak` for the
+                   printable-only prompt-injection subset that piggybacks
+                   on an emoji grapheme cluster.
 
 Advanced Unicode techniques:
   - variation:     16-bit length prefix + payload bits; VS-1 (U+FE01)
@@ -87,8 +92,12 @@ ZWSP = '​'  # zero-width space         -> bit 0
 ZWNJ = '‌'  # zero-width non-joiner    -> bit 1
 ZWJ  = '‍'  # zero-width joiner        -> delimiter
 
-TAG_BASE = 0xE0000
-TAG_END  = TAG_BASE + 0x7F
+# Unicode Tag primitive lives in `unicode_tags`; re-exported here for
+# backwards compatibility. `invisible_ink` is the general Unicode Tag steg
+# carrier (accepts any ASCII byte); see
+# `jailbreak_core.compose_unicode_tag_jailbreak` for the printable-only
+# prompt-injection subset that piggybacks on an emoji grapheme cluster.
+from unicode_tags import TAG_BASE, TAG_END, encode_tag_run, decode_tag_run
 
 # Latin -> Cyrillic homoglyphs, matching index.html:7837
 HOMOGLYPH_MAP: Dict[str, str] = {
@@ -285,33 +294,27 @@ def decode_whitespace(stego: str) -> str:
 def encode_invisible_ink(cover: str, secret: str) -> str:
     if not cover:
         raise TextStegCapacityError("invisible_ink: cover is empty")
-    parts = [chr(TAG_BASE)]
-    for ch in secret:
-        code = ord(ch)
-        if code < 128:
-            parts.append(chr(TAG_BASE + code))
-    parts.append(chr(TAG_END))
-    payload = ''.join(parts)
+    # Drop non-ASCII silently to preserve the original browser-compat behavior
+    # (the JS encoder skipped anything with codepoint >= 128).
+    ascii_secret = ''.join(ch for ch in secret if ord(ch) < 128)
+    payload = encode_tag_run(
+        ascii_secret,
+        printable_only=False,
+        start_sentinel=True,
+        terminator=True,
+    )
     if len(cover) > 1:
         return cover[0] + payload + cover[1:]
     return payload + cover
 
 
 def decode_invisible_ink(stego: str) -> str:
-    result = []
-    in_tag = False
-    for ch in stego:
-        code = ord(ch)
-        if code == TAG_BASE:
-            in_tag = True
-            continue
-        if code == TAG_END:
-            if in_tag:
-                break
-            continue
-        if in_tag and TAG_BASE <= code < TAG_BASE + 128:
-            result.append(chr(code - TAG_BASE))
-    return ''.join(result)
+    return decode_tag_run(
+        stego,
+        require_start_sentinel=True,
+        stop_on_terminator=True,
+        printable_only=False,
+    )
 
 
 # --- variation selectors -----------------------------------------------------

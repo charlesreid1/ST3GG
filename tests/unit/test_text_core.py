@@ -290,6 +290,26 @@ def test_invisible_ink_no_tags_returns_empty():
     assert text_core.decode("plain cover only", "invisible_ink") == ""
 
 
+def test_invisible_ink_still_byte_identical():
+    # Regression around the unicode_tags refactor: invisible_ink must produce
+    # byte-for-byte identical stego output for a known (cover, secret) pair.
+    cover = COVERS["invisible_ink"]
+    secret = SECRET
+    stego = text_core.encode(cover, secret, "invisible_ink")
+
+    # Reconstruct the pre-refactor output shape explicitly.
+    TAG_BASE = 0xE0000
+    TAG_END = TAG_BASE + 0x7F
+    expected_payload = (
+        chr(TAG_BASE)
+        + ''.join(chr(TAG_BASE + ord(ch)) for ch in secret if ord(ch) < 128)
+        + chr(TAG_END)
+    )
+    expected = cover[0] + expected_payload + cover[1:]
+    assert stego == expected
+    assert text_core.decode(stego, "invisible_ink") == secret
+
+
 def test_zero_width_stripped_chars_does_not_crash():
     stego = text_core.encode(COVERS["zero_width"], SECRET, "zero_width")
     # Rip out roughly half of the zero-width payload bits.
