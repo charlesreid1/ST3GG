@@ -7,8 +7,15 @@ This module owns:
     - Injection filename templates (LSB decoders, universal decoders, ...)
     - Composition helpers that assemble full multi-vector payloads across
       image LSB, PNG text chunks, filenames, and Unicode text steg
+    - The Unicode Tag prompt-injection composer
+      (``compose_unicode_tag_jailbreak``) — the 2025 "hidden emoji"
+      technique, a printable-ASCII subset of ``text_core.invisible_ink``
+      that piggybacks on an emoji grapheme cluster. Shares its low-level
+      primitive with ``text_core`` via ``unicode_tags``.
     - Detection functions that scan for jailbreak / prompt-injection signals
-      across filenames, PNG chunks, and free text
+      across filenames, PNG chunks, and free text, including
+      ``unicode_tag_smuggling`` (surfaces both the smuggling channel and
+      any known template body carried inside it).
 
 Low-level PNG chunk I/O and text effects (Zalgo, leetspeak) remain in
 `injector.py`; this module composes those primitives.
@@ -24,6 +31,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from PIL import Image
+
+from unicode_tags import (
+    TagPayloadError,
+    count_tags,
+    decode_tag_run,
+    encode_tag_run,
+)
 
 
 # ============== Jailbreak prompt templates ==============
@@ -438,6 +452,74 @@ def compose_text_jailbreak(
     )
 
 
+EMOJI_TAG_BASE = "\U0001F3F4"  # 🏴 waving black flag — the canonical carrier
+                               # in the 2025 write-ups. Chosen because it has
+                               # no default modifier of its own, so the tag
+                               # run defines the whole grapheme cluster.
+
+
+def compose_unicode_tag_jailbreak(
+    jailbreak_template: str,
+    cover_text: str,
+    *,
+    base_emoji: str = EMOJI_TAG_BASE,
+    filename: Optional[str] = None,
+) -> JailbreakPayload:
+    """Hide a jailbreak prompt as a Unicode Tag run attached to a base emoji.
+
+    This is the 2025 "hidden emoji" / Unicode Tag smuggling technique. It
+    reuses the same U+E00XX primitive as text_core's invisible_ink, but
+    constrains the payload to printable ASCII (0x20..0x7E) so it lands as
+    valid prompt text on the receiving LLM, and appends the run after a
+    base emoji so the payload forms one grapheme cluster with a visible
+    glyph. See ``st3ggmcp/TRANSPORT_MATRIX.md`` for what pipelines survive
+    this technique.
+
+    Callers whose template body contains newlines or other control chars
+    must flatten those explicitly (e.g. ``body.replace("\\n", " ")``);
+    silent normalization is refused on purpose — it would corrupt prompts
+    in ways the caller can't see, which is exactly the failure mode this
+    method exists to avoid.
+    """
+    body = _template_body(jailbreak_template)
+    try:
+        run = encode_tag_run(
+            body,
+            printable_only=True,
+            start_sentinel=False,
+            terminator=True,
+        )
+    except TagPayloadError as exc:
+        raise ValueError(
+            f"jailbreak template {jailbreak_template!r} contains non-printable "
+            f"or non-ASCII characters and cannot be encoded as a Unicode Tag "
+            f"prompt-injection payload: {exc}"
+        ) from exc
+
+    stego_text = cover_text + base_emoji + run
+    return JailbreakPayload(
+        text_content=body,
+        carrier_text=stego_text,
+        filename=filename,
+        technique_summary=(
+            f"unicode-tag prompt injection (base={base_emoji!r}, "
+            f"payload={len(body)}B printable-ASCII)"
+        ),
+    )
+
+
+def extract_unicode_tag_jailbreak(text: str) -> Optional[str]:
+    """Return the printable-ASCII payload extracted from any Unicode Tag
+    run in ``text``, or ``None`` if none is present. Useful for detectors."""
+    payload = decode_tag_run(
+        text,
+        require_start_sentinel=False,
+        stop_on_terminator=True,
+        printable_only=True,
+    )
+    return payload or None
+
+
 def compose_multimodal_jailbreak(
     jailbreak_template: str,
     carriers: List[Union[Image.Image, str]],
@@ -670,12 +752,45 @@ def detect_jailbreak_payload(text: str) -> Dict[str, Any]:
     combining_marks = sum(1 for ch in text if 0x0300 <= ord(ch) <= 0x036F)
     has_unicode_obfuscation = combining_marks > max(5, len(text) // 20)
 
+    # Unicode Tag smuggling — the 2025 "hidden emoji" prompt-injection
+    # technique. Any codepoint in U+E0000..U+E007F is a positive signal
+    # regardless of framing; if the extracted payload matches a known
+    # template or pattern, promote the outer detection so both the
+    # smuggling channel AND the smuggled body are reported.
+    tag_count = count_tags(text)
+    unicode_tag_smuggling = tag_count > 0
+    tag_smuggling_score = 0.4 if unicode_tag_smuggling else 0.0
+
+    payload_matched = False
+    if unicode_tag_smuggling:
+        extracted = extract_unicode_tag_jailbreak(text)
+        if extracted:
+            inner = detect_jailbreak_payload(extracted)
+            if inner.get("detected"):
+                payload_matched = True
+                if inner.get("matched_template") and not matched_template:
+                    matched_template = inner["matched_template"]
+                for tag in inner.get("matched_patterns", []):
+                    if tag not in matched_patterns:
+                        matched_patterns.append(tag)
+                tag_smuggling_score = min(
+                    1.0, tag_smuggling_score + inner.get("confidence", 0.0)
+                )
+
     pattern_score = min(1.0, 0.25 * len(matched_patterns))
     template_score = 0.6 if matched_template else 0.0
     obfuscation_score = 0.3 if has_unicode_obfuscation else 0.0
-    confidence = min(1.0, pattern_score + template_score + obfuscation_score)
+    confidence = min(
+        1.0,
+        pattern_score + template_score + obfuscation_score + tag_smuggling_score,
+    )
 
-    detected = bool(matched_patterns) or matched_template is not None or has_unicode_obfuscation
+    detected = (
+        bool(matched_patterns)
+        or matched_template is not None
+        or has_unicode_obfuscation
+        or unicode_tag_smuggling
+    )
 
     return {
         "detected": detected,
@@ -685,6 +800,9 @@ def detect_jailbreak_payload(text: str) -> Dict[str, Any]:
         "matched_template": matched_template,
         "unicode_obfuscation": has_unicode_obfuscation,
         "combining_marks": combining_marks,
+        "unicode_tag_smuggling": unicode_tag_smuggling,
+        "tag_codepoint_count": tag_count,
+        "payload_matched": payload_matched,
     }
 
 
