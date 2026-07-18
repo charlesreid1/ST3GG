@@ -71,7 +71,7 @@ Text / emoji detect / decode:
 Encode / hide:
 - `stegg_encode_manual` — LSB hide with channels + bits + strategy
 - `stegg_encode_metadata` — hide in a PNG text or private chunk
-- `stegg_text_encode` — hide in text via zero_width / homoglyph / whitespace / invisible_ink / variation / combining / confusable / directional / hangul / mathbold / braille / emoji / skintone / capitalization
+- `stegg_text_encode` — hide in text via zero_width / cyrillic_homoglyph / cjk_homoglyph / whitespace / invisible_ink / variation / combining / confusable / directional / hangul / mathbold / braille / emoji / skintone / capitalization
 
 Meta:
 - `stegg_list_techniques` — catalog of what this server can do

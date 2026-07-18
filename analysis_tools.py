@@ -2040,7 +2040,7 @@ _register_png_tools()
 
 # ============== ADVANCED TEXT STEGANOGRAPHY DETECTION ==============
 
-def detect_homoglyph_steg(data: bytes) -> Dict[str, Any]:
+def detect_cyrillic_homoglyph_steg(data: bytes) -> Dict[str, Any]:
     """Detect Cyrillic/Latin homoglyph substitution steganography."""
     results = {'found': False, 'substitutions': 0, 'details': []}
     try:
@@ -2065,6 +2065,42 @@ def detect_homoglyph_steg(data: bytes) -> Dict[str, Any]:
                     'offset': i,
                     'cyrillic': repr(ch),
                     'looks_like': CYRILLIC_TO_LATIN[ch]
+                })
+
+    if results['substitutions'] > 3:
+        results['found'] = True
+
+    return results
+
+
+def detect_cjk_homoglyph_steg(data: bytes) -> Dict[str, Any]:
+    """Detect CJK/fullwidth punctuation homoglyph substitution steganography.
+
+    Known limitation: the > 3 threshold false-positives on any genuinely
+    CJK-authored document, same as detect_cyrillic_homoglyph_steg does on
+    Russian text. Script-context awareness / ratio-to-total is a separate
+    concern.
+    """
+    results = {'found': False, 'substitutions': 0, 'details': []}
+    try:
+        text = data.decode('utf-8', errors='ignore')
+    except:
+        return results
+
+    # Fullwidth punctuation that looks like ASCII punctuation
+    FULLWIDTH_TO_ASCII = {
+        '\uff0c': ',', '\uff0e': '.', '\uff1b': ';', '\uff1a': ':',
+        '\uff01': '!', '\uff1f': '?', '\uff08': '(', '\uff09': ')',
+    }
+
+    for i, ch in enumerate(text):
+        if ch in FULLWIDTH_TO_ASCII:
+            results['substitutions'] += 1
+            if results['substitutions'] <= 5:
+                results['details'].append({
+                    'offset': i,
+                    'fullwidth': repr(ch),
+                    'looks_like': FULLWIDTH_TO_ASCII[ch]
                 })
 
     if results['substitutions'] > 3:
@@ -3131,7 +3167,8 @@ def sample_pairs_analysis(data: bytes) -> Dict[str, Any]:
 
 def _register_all_tools():
     """Register ALL analysis and decode tools."""
-    TOOL_REGISTRY.register('detect_homoglyph_steg', detect_homoglyph_steg)
+    TOOL_REGISTRY.register('detect_cyrillic_homoglyph_steg', detect_cyrillic_homoglyph_steg)
+    TOOL_REGISTRY.register('detect_cjk_homoglyph_steg', detect_cjk_homoglyph_steg)
     TOOL_REGISTRY.register('detect_variation_selector_steg', detect_variation_selector_steg)
     TOOL_REGISTRY.register('detect_combining_mark_steg', detect_combining_mark_steg)
     TOOL_REGISTRY.register('detect_confusable_whitespace', detect_confusable_whitespace)

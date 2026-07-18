@@ -74,7 +74,7 @@ Full text-steg detector suite over file bytes.
 | --- | --- | --- |
 | `path` | string | yes |
 
-Detectors run: `detect_unicode_steg`, `detect_whitespace_steg`, `detect_homoglyph_steg`, `detect_variation_selector_steg`, `detect_combining_mark_steg`, `detect_confusable_whitespace`, `detect_directional_override_steg`, `detect_hangul_filler_steg`, `detect_capitalization_steg`, `detect_emoji_steg`, `detect_math_bold_steg`, `detect_braille_steg`, `detect_emoji_substitution_steg`, `detect_skintone_steg`, plus decoders for directional/hangul/math/braille/emoji-skin-tone.
+Detectors run: `detect_unicode_steg`, `detect_whitespace_steg`, `detect_cyrillic_homoglyph_steg`, `detect_cjk_homoglyph_steg`, `detect_variation_selector_steg`, `detect_combining_mark_steg`, `detect_confusable_whitespace`, `detect_directional_override_steg`, `detect_hangul_filler_steg`, `detect_capitalization_steg`, `detect_emoji_steg`, `detect_math_bold_steg`, `detect_braille_steg`, `detect_emoji_substitution_steg`, `detect_skintone_steg`, plus decoders for directional/hangul/math/braille/emoji-skin-tone.
 
 ### `stegg_text_steg_message`
 Same detector suite on an inline string. Use when the user pastes suspicious text.

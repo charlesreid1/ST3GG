@@ -1438,7 +1438,8 @@ print("-" * 70)
 # Import new detectors
 try:
     from analysis_tools import (
-        detect_homoglyph_steg, detect_variation_selector_steg,
+        detect_cyrillic_homoglyph_steg, detect_cjk_homoglyph_steg,
+        detect_variation_selector_steg,
         detect_combining_mark_steg, detect_confusable_whitespace as detect_confusable_ws,
         detect_emoji_steg, detect_capitalization_steg,
     )
@@ -1447,16 +1448,16 @@ except ImportError as e:
     print(f"  [!!] New detectors not available: {e}")
     has_new_detectors = False
 
-# --- Homoglyph ---
+# --- Cyrillic Homoglyph ---
 try:
-    data = (EXAMPLES_DIR / 'example_homoglyph.txt').read_bytes()
+    data = (EXAMPLES_DIR / 'example_cyrillic_homoglyph.txt').read_bytes()
     if has_new_detectors:
-        result = detect_homoglyph_steg(data)
+        result = detect_cyrillic_homoglyph_steg(data)
         if result.get('found'):
-            record("homoglyph [detection]", "PASS",
+            record("cyrillic_homoglyph [detection]", "PASS",
                    f"{result['substitutions']} Cyrillic substitutions found")
         else:
-            record("homoglyph [detection]", "FAIL", "No homoglyphs detected")
+            record("cyrillic_homoglyph [detection]", "FAIL", "No homoglyphs detected")
 
     # Decode test
     text = data.decode('utf-8')
@@ -1486,15 +1487,28 @@ try:
                     msg_bytes.append(int(''.join(str(b) for b in msg_bits[i:i+8]), 2))
             decoded = msg_bytes.decode('utf-8', errors='replace')
             if PLINIAN_DIVIDER[:10] in decoded:
-                record("homoglyph [decode]", "PASS", "Plinian divider decoded from homoglyphs")
+                record("cyrillic_homoglyph [decode]", "PASS", "Plinian divider decoded from homoglyphs")
             else:
-                record("homoglyph [decode]", "WARN", f"Decoded {len(decoded)} chars: {decoded[:30]}")
+                record("cyrillic_homoglyph [decode]", "WARN", f"Decoded {len(decoded)} chars: {decoded[:30]}")
         else:
-            record("homoglyph [decode]", "FAIL", f"Bad length: {length}")
+            record("cyrillic_homoglyph [decode]", "FAIL", f"Bad length: {length}")
     else:
-        record("homoglyph [decode]", "FAIL", f"Only {len(bits)} carrier bits found")
+        record("cyrillic_homoglyph [decode]", "FAIL", f"Only {len(bits)} carrier bits found")
 except Exception as e:
-    record("homoglyph [test]", "FAIL", str(e))
+    record("cyrillic_homoglyph [test]", "FAIL", str(e))
+
+# --- CJK Homoglyph ---
+try:
+    data = (EXAMPLES_DIR / 'example_cjk_homoglyph.txt').read_bytes()
+    if has_new_detectors:
+        result = detect_cjk_homoglyph_steg(data)
+        if result.get('found'):
+            record("cjk_homoglyph [detection]", "PASS",
+                   f"{result['substitutions']} CJK/fullwidth substitutions found")
+        else:
+            record("cjk_homoglyph [detection]", "FAIL", "No CJK homoglyphs detected")
+except Exception as e:
+    record("cjk_homoglyph [test]", "FAIL", str(e))
 
 # --- Variation Selector ---
 try:

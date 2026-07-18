@@ -86,7 +86,7 @@ Data exfiltration doesn't always look like data exfiltration. ST3GG lets red tea
 - **100+ encoding techniques** across images, audio, text, documents, network packets, archives, and code files
 - **Polyglot file generation** — files that are simultaneously valid as two formats (PNG+ZIP)
 - **Network protocol covert channels** — data hidden in DNS queries, ICMP payloads, TCP sequence numbers, HTTP headers
-- **Unicode steganography** — invisible homoglyphs, zero-width chars, variation selectors, confusable whitespace
+- **Unicode steganography** — invisible homoglyphs (Cyrillic letters + CJK/fullwidth punctuation), zero-width chars, variation selectors, confusable whitespace
 - **Compression-resistant encoding** — F5 mode operates directly on JPEG coefficients (proven to survive social media); DCT mode designed for compression resistance
 - **Multi-layer nesting** — tested to 11 recursive layers; practical depth bounded by carrier capacity (see `stegg matryoshka plan`)
 - **Ghost Mode** — AES-256 encryption + bit scrambling + noise decoys for maximum evasion
@@ -100,7 +100,7 @@ The same toolkit that creates steganographic payloads also **detects and decodes
 - **20+ detection functions** — chi-square analysis, bit-plane entropy, histogram analysis, signature scanning, STEG header detection
 - **AI-powered exhaustive analysis** — autonomous agent tests every decoding method for the uploaded file type
 - **File type identification** — magic byte detection for 20+ formats (PNG, JPEG, GIF, BMP, WebP, TIFF, ICO, SVG, WAV, AIFF, AU, MIDI, PCAP, PDF, ZIP, GZip, TAR, SQLite, and more)
-- **Unicode steganography detection** — zero-width chars, homoglyphs, variation selectors, combining marks, confusable whitespace, emoji patterns
+- **Unicode steganography detection** — zero-width chars, homoglyphs (Cyrillic letters + CJK/fullwidth punctuation), variation selectors, combining marks, confusable whitespace, emoji patterns
 - **Whitespace analysis** — trailing space/tab encoding, Unicode space variant detection
 - **Metadata forensics** — base64/hex string extraction, EXIF analysis, PNG chunk inspection
 - **Network packet analysis** — PCAP parsing for covert channel indicators
@@ -237,7 +237,7 @@ ST3GG doesn't just hide data in images. It covers **every modality**:
 LSB embedding (RGB, RGBA, grayscale) across PNG, BMP, TIFF, GIF, WebP, ICO, PPM, PGM — plus alpha channel LSB, PNG filter-type encoding, palette index manipulation, DCT frequency domain, PNG+ZIP polyglots, metadata injection (EXIF, XMP, tEXt chunks), and trailing data after IEND.
 
 ### Text & Unicode Techniques
-Zero-width characters (ZWSP/ZWNJ/ZWJ), invisible ink (Unicode tag chars U+E0000), homoglyph substitution (Cyrillic/Latin), variation selectors, combining diacritics (CGJ), confusable whitespace (en/em/thin/hair spaces), whitespace encoding (space=0/tab=1), emoji substitution, and capitalization encoding.
+Zero-width characters (ZWSP/ZWNJ/ZWJ), invisible ink (Unicode tag chars U+E0000), homoglyph substitution (Cyrillic letters + CJK/fullwidth punctuation), variation selectors, combining diacritics (CGJ), confusable whitespace (en/em/thin/hair spaces), whitespace encoding (space=0/tab=1), emoji substitution, and capitalization encoding.
 
 ### Audio Techniques
 Sample LSB in WAV, AIFF, and AU formats. Silence interval timing (gap duration encodes bits). MIDI SysEx message embedding.

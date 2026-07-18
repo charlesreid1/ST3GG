@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 _TEXT_STEG_DETECTORS = (
     "detect_unicode_steg",
     "detect_whitespace_steg",
-    "detect_homoglyph_steg",
+    "detect_cyrillic_homoglyph_steg",
+    "detect_cjk_homoglyph_steg",
     "detect_variation_selector_steg",
     "detect_combining_mark_steg",
     "detect_confusable_whitespace",
@@ -299,9 +300,9 @@ SCHEMAS = {
     "stegg_text_encode": {
         "description": (
             "Hide a secret string inside a cover text using a text-steg technique. "
-            "Method must be one of: zero_width, homoglyph, whitespace, invisible_ink, "
-            "variation, combining, confusable, directional, hangul, mathbold, braille, "
-            "emoji, skintone, capitalization. "
+            "Method must be one of: zero_width, cyrillic_homoglyph, cjk_homoglyph, "
+            "whitespace, invisible_ink, variation, combining, confusable, directional, "
+            "hangul, mathbold, braille, emoji, skintone, capitalization. "
             "Supply the cover as either inline text (cover_text) or a file path (cover_path). "
             "Returns the stego text inline, or writes it to output_path if given. "
             "Round-trip-compatible with the browser Text Lab in index.html (except "
@@ -312,7 +313,7 @@ SCHEMAS = {
         "inputSchema": {
             "type": "object",
             "properties": {
-                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
+                "method": {"type": "string", "description": "zero_width, cyrillic_homoglyph, cjk_homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
                 "secret": {"type": "string", "description": "The secret string to hide."},
                 "cover_text": {"type": "string", "description": "Cover text supplied inline."},
                 "cover_path": {"type": "string", "description": "Filesystem path to a UTF-8 cover file (alternative to cover_text)."},
@@ -324,15 +325,16 @@ SCHEMAS = {
     "stegg_text_decode": {
         "description": (
             "Recover a hidden secret from a stego text produced by stegg_text_encode "
-            "(or by the browser Text Lab). Method must be one of: zero_width, homoglyph, "
-            "whitespace, invisible_ink, variation, combining, confusable, directional, "
-            "hangul, mathbold, braille, emoji, skintone, capitalization. Supply the stego "
-            "as inline text (stego_text) or a file path (stego_path)."
+            "(or by the browser Text Lab). Method must be one of: zero_width, "
+            "cyrillic_homoglyph, cjk_homoglyph, whitespace, invisible_ink, variation, "
+            "combining, confusable, directional, hangul, mathbold, braille, emoji, "
+            "skintone, capitalization. Supply the stego as inline text (stego_text) or "
+            "a file path (stego_path)."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
+                "method": {"type": "string", "description": "zero_width, cyrillic_homoglyph, cjk_homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
                 "stego_text": {"type": "string", "description": "Stego text supplied inline."},
                 "stego_path": {"type": "string", "description": "Filesystem path to a UTF-8 stego file (alternative to stego_text)."},
             },
@@ -343,15 +345,16 @@ SCHEMAS = {
         "description": (
             "Pre-flight: how many payload bytes will fit in this cover under this method. "
             "Use before stegg_text_encode when the cover might be too small. Length-prefixed "
-            "methods (homoglyph, whitespace, variation, combining, confusable, hangul, "
-            "mathbold, capitalization) will raise TextStegCapacityError on undersized covers. "
+            "methods (cyrillic_homoglyph, cjk_homoglyph, whitespace, variation, combining, "
+            "confusable, hangul, mathbold, capitalization) will raise TextStegCapacityError "
+            "on undersized covers. "
             "braille, emoji, and skintone append the payload as its own block after the cover "
             "(like zero_width today), so payload_bytes_max is None for those."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "method": {"type": "string", "description": "zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
+                "method": {"type": "string", "description": "zero_width, cyrillic_homoglyph, cjk_homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, or capitalization."},
                 "cover_text": {"type": "string", "description": "Cover text supplied inline."},
                 "cover_path": {"type": "string", "description": "Filesystem path to a UTF-8 cover file (alternative to cover_text)."},
             },

@@ -2924,7 +2924,7 @@ mass_kg = 8_400
 # 46. Homoglyph steganography (Cyrillic/Latin substitution)
 # =============================================================================
 
-def generate_homoglyph():
+def generate_cyrillic_homoglyph():
     """Create a text file with Plinian divider encoded via Cyrillic/Latin homoglyphs.
 
     Each confusable character substituted = 1, left as Latin = 0.
@@ -3000,7 +3000,76 @@ def generate_homoglyph():
             result[pos] = HOMOGLYPH_MAP[cover[pos]]
         bit_idx += 1
 
-    path = os.path.join(OUTPUT_DIR, 'example_homoglyph.txt')
+    path = os.path.join(OUTPUT_DIR, 'example_cyrillic_homoglyph.txt')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(''.join(result))
+    print(f"    -> {path} ({bit_idx} bits in {len(carriers)} carrier chars)")
+    return path
+
+
+def generate_cjk_homoglyph():
+    """Create a text file with Plinian divider encoded via CJK/fullwidth punctuation.
+
+    ASCII punctuation is substituted with its fullwidth twin (U+FF0C, U+FF0E,
+    etc.). Same primitive as generate_cyrillic_homoglyph, different carrier
+    table (ASCII punctuation instead of Latin letters).
+    """
+    print("  Generating CJK homoglyph (fullwidth punctuation) steganography...")
+
+    CJK_HOMOGLYPH_MAP = {
+        ',': '，', '.': '．', ';': '；', ':': '：',
+        '!': '！', '?': '？', '(': '（', ')': '）',
+    }
+
+    # Punctuation-dense cover so the Plinian divider (~123 UTF-8 bytes ->
+    # 16 + 984 = 1000 carrier bits needed) fits with headroom.
+    cover = (
+        "The Stegosaurus, a plated herbivore, roamed the Late Jurassic; its "
+        "back plates (once thought armor!) served thermoregulation, not "
+        "defense. Contemporaries included: Allosaurus (predator), "
+        "Diplodocus (long-necked sauropod), and Brachiosaurus (tallest of "
+        "its era). What did they eat? Ferns, cycads, and horsetails. Where? "
+        "Across Laurasia and Gondwana. When? Roughly 155 to 145 million "
+        "years ago. The thagomizer (four tail spikes; named after a "
+        "Far Side cartoon!) was the Stegosaurus's real weapon: puncture "
+        "marks on Allosaurus fossils match its spacing exactly. Fossils "
+        "have been found in: Colorado, Wyoming, Utah (western North "
+        "America); and Portugal (western Iberia). Reconstruction efforts "
+        "continue: museums display mounted skeletons; paleontologists "
+        "argue about posture, gait, and social behavior; artists render "
+        "landscapes; and educators teach the story to a new generation. "
+        "Questions remain: Did the plates flush with blood for display? "
+        "Were juveniles herded by adults? How fast could an adult run? "
+        "Answers accumulate, slowly, one specimen at a time; the field "
+        "advances by careful measurement, argument, and revision."
+    ) * 12
+
+    msg_bytes = PLINIAN_DIVIDER.encode('utf-8')
+    bits = []
+    for b in msg_bytes:
+        for j in range(7, -1, -1):
+            bits.append((b >> j) & 1)
+
+    carriers = [i for i, ch in enumerate(cover) if ch in CJK_HOMOGLYPH_MAP]
+    length_bits = [int(b) for b in format(len(msg_bytes), '016b')]
+    all_bits = length_bits + bits
+
+    if len(all_bits) > len(carriers):
+        raise RuntimeError(
+            f"cjk_homoglyph cover too small: need {len(all_bits)} carrier "
+            f"bits, have {len(carriers)}"
+        )
+
+    result = list(cover)
+    bit_idx = 0
+    for pos in carriers:
+        if bit_idx >= len(all_bits):
+            break
+        if all_bits[bit_idx] == 1:
+            result[pos] = CJK_HOMOGLYPH_MAP[cover[pos]]
+        bit_idx += 1
+
+    path = os.path.join(OUTPUT_DIR, 'example_cjk_homoglyph.txt')
     with open(path, 'w', encoding='utf-8') as f:
         f.write(''.join(result))
     print(f"    -> {path} ({bit_idx} bits in {len(carriers)} carrier chars)")
@@ -6250,7 +6319,8 @@ def main():
     files.append(generate_toml_hidden())
 
     # Chunk 5: Unicode & text tricks
-    files.append(generate_homoglyph())
+    files.append(generate_cyrillic_homoglyph())
+    files.append(generate_cjk_homoglyph())
     files.append(generate_variation_selector())
     files.append(generate_combining_diacritics())
     files.append(generate_confusable_whitespace())
