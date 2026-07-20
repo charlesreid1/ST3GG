@@ -149,12 +149,12 @@ Catalog of what the server covers, grouped by carrier family and detect/encode r
 
 ## Method list (text tools)
 
-`zero_width`, `homoglyph`, `whitespace`, `invisible_ink`, `variation`, `combining`, `confusable`, `directional`, `hangul`, `mathbold`, `braille`, `emoji`, `skintone`, `capitalization`.
+`zero_width`, `cyrillic_homoglyph`, `cjk_homoglyph`, `whitespace`, `invisible_ink`, `variation`, `combining`, `confusable`, `directional`, `hangul`, `mathbold`, `braille`, `emoji`, `skintone`, `capitalization`.
 
 Notes:
-- All methods except `capitalization` are round-trip-compatible with the browser Text Lab in `index.html`.
+- `cyrillic_homoglyph` (Latin letter ↔ Cyrillic twin) and every other method except `cjk_homoglyph` and `capitalization` are round-trip-compatible with the browser Text Lab in `index.html`; the browser exposes `cyrillic_homoglyph` as `homoglyph`. `cjk_homoglyph` (ASCII punctuation ↔ CJK/fullwidth twin) and `capitalization` are Python-only.
 - `braille`, `emoji`, `skintone` append the payload as its own block after the cover (separated by `\n\n`) — visibly perturbed, not invisible.
-- Length-prefixed methods (`homoglyph`, `whitespace`, `variation`, `combining`, `confusable`, `hangul`, `mathbold`, `capitalization`) raise `TextStegCapacityError` on undersized covers — use `stegg_text_capacity` first when the cover might be too small.
+- Length-prefixed methods (`cyrillic_homoglyph`, `cjk_homoglyph`, `whitespace`, `variation`, `combining`, `confusable`, `hangul`, `mathbold`, `capitalization`) raise `TextStegCapacityError` on undersized covers — use `stegg_text_capacity` first when the cover might be too small.
 
 ## Resource
 
