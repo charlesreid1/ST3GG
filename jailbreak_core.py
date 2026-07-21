@@ -431,12 +431,35 @@ def compose_text_jailbreak(
     cover_text: str,
     *,
     stego_method: str = "zero_width",
+    obfuscation: Optional[List[str]] = None,
     filename: Optional[str] = None,
 ) -> JailbreakPayload:
-    """Hide the jailbreak prompt inside cover text via Unicode steganography."""
+    """Hide the jailbreak prompt inside cover text via Unicode steganography.
+
+    ``obfuscation`` is an ordered list of transform names from
+    ``transforms_core`` (``"zalgo"``, ``"fullwidth"``, ``"leetspeak"``, or any
+    other registered transform) that are applied to the template body
+    *before* stego encoding. Order matters — ``["fullwidth", "zalgo"]``
+    produces different output than ``["zalgo", "fullwidth"]``. Callers may
+    chain transforms to defeat multiple filter types in one payload, and
+    should pick a chain that survives the target transport (see
+    ``st3ggmcp/TRANSPORT_MATRIX.md``).
+
+    The v1 interface is ``List[str]`` — bare names, no per-transform
+    options. When keyed transforms arrive (Caesar shift, Vigenère key,
+    tunable zalgo intensity, ...) this can grow into a list of
+    ``(name, kwargs)`` tuples in v2 without breaking today's callers. Do
+    not invent a parallel per-transform config mechanism outside this
+    parameter.
+    """
     import text_core as _tc
+    import transforms_core as _tx
 
     body = _template_body(jailbreak_template)
+    if obfuscation:
+        for name in obfuscation:
+            body = _tx.get_transform(name)(body)
+
     encoder_name = f"encode_{stego_method}"
     encoder = getattr(_tc, encoder_name, None)
     if encoder is None:
@@ -448,7 +471,10 @@ def compose_text_jailbreak(
         text_content=body,
         carrier_text=stego_text,
         filename=filename,
-        technique_summary=f"text stego ({stego_method}, cover_len={len(cover_text)})",
+        technique_summary=(
+            f"text stego ({stego_method}, cover_len={len(cover_text)})"
+            + (f" + obfuscation ({'+'.join(obfuscation)})" if obfuscation else "")
+        ),
     )
 
 
@@ -463,6 +489,7 @@ def compose_unicode_tag_jailbreak(
     cover_text: str,
     *,
     base_emoji: str = EMOJI_TAG_BASE,
+    obfuscation: Optional[List[str]] = None,
     filename: Optional[str] = None,
 ) -> JailbreakPayload:
     """Hide a jailbreak prompt as a Unicode Tag run attached to a base emoji.
@@ -480,8 +507,22 @@ def compose_unicode_tag_jailbreak(
     silent normalization is refused on purpose — it would corrupt prompts
     in ways the caller can't see, which is exactly the failure mode this
     method exists to avoid.
+
+    ``obfuscation`` accepts the same list-of-transform-names contract as
+    ``compose_text_jailbreak``. Transforms are applied to the template body
+    *before* Unicode Tag encoding, so the printable-ASCII constraint bites
+    the transformed output — a chain that produces non-printable characters
+    (e.g. ``fullwidth`` before tag encoding) will surface the existing
+    ``TagPayloadError``/``ValueError``. Callers are responsible for
+    ordering, same philosophy as the "must flatten newlines" rule above.
     """
+    import transforms_core as _tx
+
     body = _template_body(jailbreak_template)
+    if obfuscation:
+        for name in obfuscation:
+            body = _tx.get_transform(name)(body)
+
     try:
         run = encode_tag_run(
             body,
@@ -504,6 +545,7 @@ def compose_unicode_tag_jailbreak(
         technique_summary=(
             f"unicode-tag prompt injection (base={base_emoji!r}, "
             f"payload={len(body)}B printable-ASCII)"
+            + (f" + obfuscation ({'+'.join(obfuscation)})" if obfuscation else "")
         ),
     )
 
@@ -748,9 +790,19 @@ def detect_jailbreak_payload(text: str) -> Dict[str, Any]:
 
     matched_template = _match_template_body(text)
 
-    # Unicode obfuscation layered on jailbreak text (combining-mark smuggling)
+    # ---- Detection signal registry ----
+    # Each surface-level obfuscation transform in transforms_core.py that
+    # leaves a detectable codepoint fingerprint gets one signal here. Group
+    # by P4RS3LT0NGV3 category (unicode, format, encoding, cipher, ...). When
+    # you add a new transform there, add its detection here.
+    #
+    # format: zalgo — density of combining-mark codepoints.
     combining_marks = sum(1 for ch in text if 0x0300 <= ord(ch) <= 0x036F)
     has_unicode_obfuscation = combining_marks > max(5, len(text) // 20)
+
+    # format: fullwidth — density of fullwidth-ASCII codepoints (U+FF01..U+FF5E).
+    fullwidth_chars = sum(1 for ch in text if 0xFF01 <= ord(ch) <= 0xFF5E)
+    has_fullwidth = fullwidth_chars > max(3, len(text) // 20)
 
     # Unicode Tag smuggling — the 2025 "hidden emoji" prompt-injection
     # technique. Any codepoint in U+E0000..U+E007F is a positive signal
@@ -780,15 +832,18 @@ def detect_jailbreak_payload(text: str) -> Dict[str, Any]:
     pattern_score = min(1.0, 0.25 * len(matched_patterns))
     template_score = 0.6 if matched_template else 0.0
     obfuscation_score = 0.3 if has_unicode_obfuscation else 0.0
+    fullwidth_score = 0.3 if has_fullwidth else 0.0
     confidence = min(
         1.0,
-        pattern_score + template_score + obfuscation_score + tag_smuggling_score,
+        pattern_score + template_score + obfuscation_score + fullwidth_score
+        + tag_smuggling_score,
     )
 
     detected = (
         bool(matched_patterns)
         or matched_template is not None
         or has_unicode_obfuscation
+        or has_fullwidth
         or unicode_tag_smuggling
     )
 
@@ -800,6 +855,8 @@ def detect_jailbreak_payload(text: str) -> Dict[str, Any]:
         "matched_template": matched_template,
         "unicode_obfuscation": has_unicode_obfuscation,
         "combining_marks": combining_marks,
+        "fullwidth_obfuscation": has_fullwidth,
+        "fullwidth_chars": fullwidth_chars,
         "unicode_tag_smuggling": unicode_tag_smuggling,
         "tag_codepoint_count": tag_count,
         "payload_matched": payload_matched,
