@@ -9,7 +9,7 @@ async def execute_list_techniques(**_kw) -> str:
     catalog = {
         "families": {
             "image": "PNG/JPEG/BMP carriers. LSB, chunk smuggling, trailing bytes, metadata, polyglots.",
-            "text":  "Prose and source-code carriers. Zero-width, homoglyph, whitespace, variation, combining, confusable, directional, hangul, mathbold, capitalization, invisible_ink.",
+            "text":  "Prose and source-code carriers. Zero-width, cyrillic_homoglyph, cjk_homoglyph, whitespace, variation, combining, confusable, directional, hangul, mathbold, capitalization, invisible_ink.",
             "emoji": "Emoji carriers. Substitution (🔴/🔵), skin-tone modifiers, braille block, variation selectors piggybacked on emoji.",
             "general_advice": "No tool call needed — ask ST3GG about technique tradeoffs, transport survival, capacity math, or 'how would you hide X in Y'. General questions are a first-class deliverable.",
         },
@@ -32,7 +32,7 @@ async def execute_list_techniques(**_kw) -> str:
             "text_decode":       "stegg_text_decode — recover a payload from a stego text with a named method.",
             "text_capacity":     "stegg_text_capacity — pre-flight how many bytes fit under a text-steg method for a given cover.",
             "detectors_covered": (
-                "zero-width chars (ZWSP/ZWNJ/ZWJ/BOM), Unicode homoglyphs, variation selectors, "
+                "zero-width chars (ZWSP/ZWNJ/ZWJ/BOM), Cyrillic + CJK homoglyphs, variation selectors, "
                 "combining marks, confusable whitespace, capitalization patterns, emoji "
                 "substitution, directional overrides (RLO/LRO/PDF), hangul filler, math "
                 "alphanumerics, braille patterns, emoji skin-tone modifiers, tab/space whitespace."
@@ -44,9 +44,10 @@ async def execute_list_techniques(**_kw) -> str:
             "image_exif":     "stegg_inject_exif — bulk-inject multiple tEXt key/value pairs via PIL PngInfo (one call, many keys).",
             "image_dct":      "stegg_dct_encode — hide via DCT (frequency-domain). Slower and lower capacity than LSB, but medium/high robustness survives JPEG recompression (which destroys LSB). Use stegg_dct_capacity to pre-flight fit.",
             "text_encode": (
-                "stegg_text_encode — hide in text/emoji via one of: zero_width, homoglyph, "
-                "whitespace, invisible_ink, variation, combining, confusable, directional, "
-                "hangul, mathbold, braille, emoji, skintone, or capitalization. Round-trip-"
+                "stegg_text_encode — hide in text/emoji via one of: zero_width, "
+                "cyrillic_homoglyph, cjk_homoglyph, whitespace, invisible_ink, variation, "
+                "combining, confusable, directional, hangul, mathbold, braille, emoji, "
+                "skintone, or capitalization. Round-trip-"
                 "compatible with the browser Text Lab (except capitalization, which is "
                 "Python-only). braille/emoji/skintone append the payload as its own block "
                 "after the cover — visibly perturbed, not invisible."

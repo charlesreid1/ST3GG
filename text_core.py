@@ -7,9 +7,18 @@ stego texts the browser produces.
 Classic techniques:
   - zero_width:    ZWJ start + ZWSP(0)/ZWNJ(1) payload bits + ZWJ end,
                    spliced after the first cover char.
-  - homoglyph:     Latin -> Cyrillic twin substitution. 16-bit length
-                   prefix followed by payload bits, ridden on the
+  - cyrillic_homoglyph: Latin letter -> Cyrillic twin substitution. 16-bit
+                   length prefix followed by payload bits, ridden on the
                    available Latin carrier positions in cover order.
+  - cjk_homoglyph: ASCII punctuation -> CJK/fullwidth twin substitution.
+                   Same shape (16-bit length prefix + payload bits) but the
+                   carriers are punctuation, not letters. Future extensions
+                   (deliberately excluded from v1): ideographic comma/stop
+                   U+3001/U+3002 (visually distinct at close inspection),
+                   fullwidth digits/letters U+FF10..U+FF5A (double-width in
+                   CJK fonts). Hard exclusion, ever: ideographic space
+                   U+3000 (renders visibly wider than ASCII space and
+                   defeats the "impossible to see" property).
   - whitespace:    8 trailing bits per line, ' ' = 0 / '\\t' = 1. 16-bit
                    length prefix + payload bits.
   - invisible_ink: U+E0000 start tag, ASCII -> tag-char body (code+base),
@@ -100,14 +109,28 @@ ZWJ  = '‍'  # zero-width joiner        -> delimiter
 from unicode_tags import TAG_BASE, TAG_END, encode_tag_run, decode_tag_run
 
 # Latin -> Cyrillic homoglyphs, matching index.html:7837
-HOMOGLYPH_MAP: Dict[str, str] = {
+CYRILLIC_HOMOGLYPH_MAP: Dict[str, str] = {
     'a': 'а', 'c': 'с', 'e': 'е', 'o': 'о',
     'p': 'р', 'x': 'х', 'y': 'у',
     'A': 'А', 'B': 'В', 'C': 'С', 'E': 'Е',
     'H': 'Н', 'K': 'К', 'M': 'М', 'O': 'О',
     'P': 'Р', 'T': 'Т', 'X': 'Х',
 }
-HOMOGLYPH_REVERSE: Dict[str, str] = {v: k for k, v in HOMOGLYPH_MAP.items()}
+CYRILLIC_HOMOGLYPH_REVERSE: Dict[str, str] = {v: k for k, v in CYRILLIC_HOMOGLYPH_MAP.items()}
+
+# ASCII punctuation -> CJK/fullwidth twin (Halfwidth-and-Fullwidth Forms,
+# U+FF00 block). Same primitive as CYRILLIC_HOMOGLYPH_MAP; different table.
+CJK_HOMOGLYPH_MAP: Dict[str, str] = {
+    ',': '，',  # U+FF0C FULLWIDTH COMMA
+    '.': '．',  # U+FF0E FULLWIDTH FULL STOP
+    ';': '；',  # U+FF1B FULLWIDTH SEMICOLON
+    ':': '：',  # U+FF1A FULLWIDTH COLON
+    '!': '！',  # U+FF01 FULLWIDTH EXCLAMATION MARK
+    '?': '？',  # U+FF1F FULLWIDTH QUESTION MARK
+    '(': '（',  # U+FF08 FULLWIDTH LEFT PARENTHESIS
+    ')': '）',  # U+FF09 FULLWIDTH RIGHT PARENTHESIS
+}
+CJK_HOMOGLYPH_REVERSE: Dict[str, str] = {v: k for k, v in CJK_HOMOGLYPH_MAP.items()}
 
 # Advanced Unicode constants (ported from index.html:8076-8152).
 VS1           = '︁'  # VARIATION SELECTOR-1
@@ -142,7 +165,8 @@ SKINTONE_TABLE = ('\U0001F3FB', '\U0001F3FC', '\U0001F3FE', '\U0001F3FF')  # 00,
 SKINTONE_REVERSE = {t: i for i, t in enumerate(SKINTONE_TABLE)}
 
 METHODS: Tuple[str, ...] = (
-    'zero_width', 'homoglyph', 'whitespace', 'invisible_ink',
+    'zero_width', 'cyrillic_homoglyph', 'cjk_homoglyph', 'whitespace',
+    'invisible_ink',
     'variation', 'combining', 'confusable', 'directional', 'hangul',
     'mathbold', 'braille', 'emoji', 'skintone', 'capitalization',
 )
@@ -195,39 +219,50 @@ def decode_zero_width(stego: str) -> str:
     return _bits_to_bytes(bits, nbytes).decode('utf-8', errors='replace')
 
 
-# --- homoglyph ---------------------------------------------------------------
+# --- homoglyph family --------------------------------------------------------
+#
+# Two peer methods share one primitive: pick a carrier char, encode 1 bit per
+# carrier by choosing the ASCII form (0) or the look-alike twin (1),
+# length-prefixed with 16 bits.
+#
+#   cyrillic_homoglyph — Latin letter ↔ Cyrillic letter
+#   cjk_homoglyph      — ASCII punctuation ↔ CJK/fullwidth punctuation
 
-def _homoglyph_carriers(cover: str) -> int:
-    return sum(1 for ch in cover if ch in HOMOGLYPH_MAP)
+def _homoglyph_carriers_generic(cover: str, table: Dict[str, str]) -> int:
+    return sum(1 for ch in cover if ch in table)
 
 
-def encode_homoglyph(cover: str, secret: str) -> str:
+def _encode_homoglyph_generic(
+    cover: str, secret: str, table: Dict[str, str], name: str
+) -> str:
     payload = secret.encode('utf-8')
     bits = format(len(payload), '016b') + _bits_of(payload)
-    have = _homoglyph_carriers(cover)
+    have = _homoglyph_carriers_generic(cover, table)
     need = len(bits)
     if need > have:
         raise TextStegCapacityError(
-            f"homoglyph: cover too small: need {need} carrier bits, have {have} "
+            f"{name}: cover too small: need {need} carrier bits, have {have} "
             f"({need - have} short; payload = {len(payload)} bytes)"
         )
     out = []
     bit_idx = 0
     for ch in cover:
-        if bit_idx < len(bits) and ch in HOMOGLYPH_MAP:
-            out.append(HOMOGLYPH_MAP[ch] if bits[bit_idx] == '1' else ch)
+        if bit_idx < len(bits) and ch in table:
+            out.append(table[ch] if bits[bit_idx] == '1' else ch)
             bit_idx += 1
         else:
             out.append(ch)
     return ''.join(out)
 
 
-def decode_homoglyph(stego: str) -> str:
+def _decode_homoglyph_generic(
+    stego: str, table: Dict[str, str], reverse: Dict[str, str]
+) -> str:
     bits = []
     for ch in stego:
-        if ch in HOMOGLYPH_REVERSE:
+        if ch in reverse:
             bits.append('1')
-        elif ch in HOMOGLYPH_MAP:
+        elif ch in table:
             bits.append('0')
     if len(bits) < 16:
         return ''
@@ -236,6 +271,30 @@ def decode_homoglyph(stego: str) -> str:
         return ''
     data_bits = ''.join(bits[16:16 + 8 * length])
     return _bits_to_bytes(data_bits, length).decode('utf-8', errors='replace')
+
+
+def encode_cyrillic_homoglyph(cover: str, secret: str) -> str:
+    return _encode_homoglyph_generic(
+        cover, secret, CYRILLIC_HOMOGLYPH_MAP, "cyrillic_homoglyph"
+    )
+
+
+def decode_cyrillic_homoglyph(stego: str) -> str:
+    return _decode_homoglyph_generic(
+        stego, CYRILLIC_HOMOGLYPH_MAP, CYRILLIC_HOMOGLYPH_REVERSE
+    )
+
+
+def encode_cjk_homoglyph(cover: str, secret: str) -> str:
+    return _encode_homoglyph_generic(
+        cover, secret, CJK_HOMOGLYPH_MAP, "cjk_homoglyph"
+    )
+
+
+def decode_cjk_homoglyph(stego: str) -> str:
+    return _decode_homoglyph_generic(
+        stego, CJK_HOMOGLYPH_MAP, CJK_HOMOGLYPH_REVERSE
+    )
 
 
 # --- whitespace --------------------------------------------------------------
@@ -734,16 +793,28 @@ def capacity(cover: str, method: str) -> dict:
                 "just needs to be non-empty."
             ),
         }
-    if method == 'homoglyph':
-        bits = _homoglyph_carriers(cover)
+    if method == 'cyrillic_homoglyph':
+        bits = _homoglyph_carriers_generic(cover, CYRILLIC_HOMOGLYPH_MAP)
         max_bytes = max(0, (bits - 16) // 8)
         return {
             'method': method,
             'carrier_bits': bits,
             'payload_bytes_max': max_bytes,
             'notes': (
-                f"16-bit length prefix + 8 bits per Latin-carrier char "
+                f"16-bit length prefix + 1 bit per Latin-carrier letter "
                 f"(a c e o p x y A B C E H K M O P T X)."
+            ),
+        }
+    if method == 'cjk_homoglyph':
+        bits = _homoglyph_carriers_generic(cover, CJK_HOMOGLYPH_MAP)
+        max_bytes = max(0, (bits - 16) // 8)
+        return {
+            'method': method,
+            'carrier_bits': bits,
+            'payload_bytes_max': max_bytes,
+            'notes': (
+                f"16-bit length prefix + 1 bit per ASCII punctuation carrier "
+                f"(, . ; : ! ? ( ))."
             ),
         }
     if method == 'whitespace':
@@ -885,37 +956,39 @@ def capacity(cover: str, method: str) -> dict:
 # --- generic dispatchers -----------------------------------------------------
 
 _ENCODERS = {
-    'zero_width':    encode_zero_width,
-    'homoglyph':     encode_homoglyph,
-    'whitespace':    encode_whitespace,
-    'invisible_ink': encode_invisible_ink,
-    'variation':     encode_variation,
-    'combining':     encode_combining,
-    'confusable':    encode_confusable,
-    'directional':   encode_directional,
-    'hangul':        encode_hangul,
-    'mathbold':       encode_mathbold,
-    'braille':        encode_braille,
-    'emoji':          encode_emoji,
-    'skintone':       encode_skintone,
-    'capitalization': encode_capitalization,
+    'zero_width':         encode_zero_width,
+    'cyrillic_homoglyph': encode_cyrillic_homoglyph,
+    'cjk_homoglyph':      encode_cjk_homoglyph,
+    'whitespace':         encode_whitespace,
+    'invisible_ink':      encode_invisible_ink,
+    'variation':          encode_variation,
+    'combining':          encode_combining,
+    'confusable':         encode_confusable,
+    'directional':        encode_directional,
+    'hangul':             encode_hangul,
+    'mathbold':           encode_mathbold,
+    'braille':            encode_braille,
+    'emoji':              encode_emoji,
+    'skintone':           encode_skintone,
+    'capitalization':     encode_capitalization,
 }
 
 _DECODERS = {
-    'zero_width':    decode_zero_width,
-    'homoglyph':     decode_homoglyph,
-    'whitespace':    decode_whitespace,
-    'invisible_ink': decode_invisible_ink,
-    'variation':     decode_variation,
-    'combining':     decode_combining,
-    'confusable':    decode_confusable,
-    'directional':   decode_directional,
-    'hangul':        decode_hangul,
-    'mathbold':       decode_mathbold,
-    'braille':        decode_braille,
-    'emoji':          decode_emoji,
-    'skintone':       decode_skintone,
-    'capitalization': decode_capitalization,
+    'zero_width':         decode_zero_width,
+    'cyrillic_homoglyph': decode_cyrillic_homoglyph,
+    'cjk_homoglyph':      decode_cjk_homoglyph,
+    'whitespace':         decode_whitespace,
+    'invisible_ink':      decode_invisible_ink,
+    'variation':          decode_variation,
+    'combining':          decode_combining,
+    'confusable':         decode_confusable,
+    'directional':        decode_directional,
+    'hangul':             decode_hangul,
+    'mathbold':           decode_mathbold,
+    'braille':            decode_braille,
+    'emoji':              decode_emoji,
+    'skintone':           decode_skintone,
+    'capitalization':     decode_capitalization,
 }
 
 

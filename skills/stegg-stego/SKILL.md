@@ -1,6 +1,6 @@
 ---
 name: stegg-stego
-description: "ST3GG steganography via HTTP MCP server — image LSB encode/decode, PNG chunk/EXIF injection, statistical triage with SUSPICIOUS/INCONCLUSIVE/CLEAN verdicts, text and emoji carriers (zero-width, homoglyph, whitespace, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, capitalization), and container carving (ZIP/GZip/TAR/PDF/SQLite/SVG/PCAP/JPEG/audio-LSB). Use when analyzing files for hidden content, hiding data in images or text, injecting metadata, or answering technique-tradeoff questions. Triggers on stegg, steganography, steg, LSB, hide data, hidden data, steganalysis, zero-width, homoglyph, PNG chunk, EXIF injection."
+description: "ST3GG steganography via HTTP MCP server — image LSB encode/decode, PNG chunk/EXIF injection, statistical triage with SUSPICIOUS/INCONCLUSIVE/CLEAN verdicts, text and emoji carriers (zero-width, cyrillic_homoglyph, cjk_homoglyph, whitespace, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, capitalization), and container carving (ZIP/GZip/TAR/PDF/SQLite/SVG/PCAP/JPEG/audio-LSB). Use when analyzing files for hidden content, hiding data in images or text, injecting metadata, or answering technique-tradeoff questions. Triggers on stegg, steganography, steg, LSB, hide data, hidden data, steganalysis, zero-width, homoglyph, cyrillic_homoglyph, cjk_homoglyph, PNG chunk, EXIF injection."
 ---
 
 # ST3GG stego (MCP)
@@ -38,7 +38,7 @@ Text / emoji detect / decode:
 Encode / hide:
 - `stegg_encode_manual` — image LSB with `channels + bits + strategy`.
 - `stegg_encode_metadata` — hide in a PNG text chunk (tEXt/iTXt/zTXt) or private chunk.
-- `stegg_text_encode` — hide via one of: zero_width, homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, capitalization.
+- `stegg_text_encode` — hide via one of: zero_width, cyrillic_homoglyph, cjk_homoglyph, whitespace, invisible_ink, variation, combining, confusable, directional, hangul, mathbold, braille, emoji, skintone, capitalization.
 
 Meta:
 - `stegg_list_techniques` — catalog of what this server can do.

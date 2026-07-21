@@ -89,7 +89,8 @@ All new examples (Plinian divider series) encode the secret message:
 
 | File | Technique | What's Hidden |
 |------|-----------|---------------|
-| `example_homoglyph.txt` | Cyrillic/Latin homoglyphs | Plinian divider in Cyrillic letter substitutions (а vs a, с vs c, etc.) |
+| `example_cyrillic_homoglyph.txt` | Cyrillic/Latin homoglyphs | Plinian divider in Cyrillic letter substitutions (а vs a, с vs c, etc.) |
+| `example_cjk_homoglyph.txt` | CJK/fullwidth punctuation homoglyphs | Plinian divider in ASCII↔fullwidth punctuation substitutions (`,` vs `，`, `.` vs `．`, etc.) |
 | `example_variation_selector.txt` | Unicode variation selectors | Plinian divider in VS1 (U+FE01) presence/absence after letters |
 | `example_combining_diacritics.txt` | Combining Grapheme Joiner | Plinian divider in invisible U+034F marks after letters |
 | `example_confusable_whitespace.txt` | Unicode space variants | Plinian divider in en/em/thin space substitution (2 bits per space) |

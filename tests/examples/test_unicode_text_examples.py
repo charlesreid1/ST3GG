@@ -6,10 +6,11 @@ import pytest
 
 from analysis_tools import (
     detect_capitalization_steg,
+    detect_cjk_homoglyph_steg,
     detect_combining_mark_steg,
     detect_confusable_whitespace,
+    detect_cyrillic_homoglyph_steg,
     detect_emoji_steg,
-    detect_homoglyph_steg,
     detect_unicode_steg,
     detect_variation_selector_steg,
     detect_whitespace_steg,
@@ -21,7 +22,8 @@ UNICODE_CASES = [
     ("example_zero_width.txt", detect_unicode_steg, "found"),
     ("example_whitespace.txt", detect_whitespace_steg, "found"),
     ("example_whitespace.csv", detect_whitespace_steg, "found"),
-    ("example_homoglyph.txt", detect_homoglyph_steg, "found"),
+    ("example_cyrillic_homoglyph.txt", detect_cyrillic_homoglyph_steg, "found"),
+    ("example_cjk_homoglyph.txt", detect_cjk_homoglyph_steg, "found"),
     ("example_variation_selector.txt", detect_variation_selector_steg, "found"),
     ("example_combining_diacritics.txt", detect_combining_mark_steg, "found"),
     ("example_confusable_whitespace.txt", detect_confusable_whitespace, "found"),

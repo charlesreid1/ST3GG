@@ -31,9 +31,14 @@ LINES_COVER = "\n".join(f"line {i} contains some text" for i in range(64))
 #   directional cover is a splice site only
 #   hangul     needs >=184 ASCII spaces (1 bit/space); PREAMBLE has ~46 -> 5x
 COVERS = {
-    "zero_width":    PREAMBLE,
-    "homoglyph":     PREAMBLE + " " + PREAMBLE + " " + PREAMBLE,
-    "whitespace":    LINES_COVER,
+    "zero_width":         PREAMBLE,
+    "cyrillic_homoglyph": PREAMBLE + " " + PREAMBLE + " " + PREAMBLE,
+    # cjk_homoglyph needs punctuation carriers: fabricate a punctuation-dense
+    # cover by repeating a punctuation-heavy sentence. Each repetition has 5
+    # ASCII punctuation carriers (, . ; : ?); 40 reps -> 200 carriers,
+    # comfortably above the 184 bits needed for SECRET.
+    "cjk_homoglyph":      ("Hello, world; goodbye: really? Yes." * 40),
+    "whitespace":         LINES_COVER,
     "invisible_ink": PREAMBLE,
     "variation":     PREAMBLE + " " + PREAMBLE,
     "combining":     PREAMBLE + " " + PREAMBLE,
@@ -75,9 +80,15 @@ def test_stego_differs_from_cover(method):
 
 # --- capacity failures -------------------------------------------------------
 
-def test_homoglyph_capacity_error():
+def test_cyrillic_homoglyph_capacity_error():
     with pytest.raises(text_core.TextStegCapacityError) as exc:
-        text_core.encode("abc", SECRET, "homoglyph")
+        text_core.encode("abc", SECRET, "cyrillic_homoglyph")
+    assert "cover too small" in str(exc.value)
+
+
+def test_cjk_homoglyph_capacity_error():
+    with pytest.raises(text_core.TextStegCapacityError) as exc:
+        text_core.encode("abc", SECRET, "cjk_homoglyph")
     assert "cover too small" in str(exc.value)
 
 
@@ -130,8 +141,15 @@ def test_capitalization_capacity_error():
 
 
 def test_capacity_reports_bytes_max():
-    rep = text_core.capacity(PREAMBLE, "homoglyph")
-    assert rep["method"] == "homoglyph"
+    rep = text_core.capacity(PREAMBLE, "cyrillic_homoglyph")
+    assert rep["method"] == "cyrillic_homoglyph"
+    assert rep["payload_bytes_max"] >= 0
+    assert rep["carrier_bits"] >= 0
+
+
+def test_capacity_reports_bytes_max_cjk():
+    rep = text_core.capacity(COVERS["cjk_homoglyph"], "cjk_homoglyph")
+    assert rep["method"] == "cjk_homoglyph"
     assert rep["payload_bytes_max"] >= 0
     assert rep["carrier_bits"] >= 0
 
@@ -149,9 +167,15 @@ def test_zero_width_detector_composes():
     assert r["found"] is True
 
 
-def test_homoglyph_detector_composes():
-    stego = text_core.encode(COVERS["homoglyph"], SECRET, "homoglyph")
-    r = at.detect_homoglyph_steg(stego.encode("utf-8"))
+def test_cyrillic_homoglyph_detector_composes():
+    stego = text_core.encode(COVERS["cyrillic_homoglyph"], SECRET, "cyrillic_homoglyph")
+    r = at.detect_cyrillic_homoglyph_steg(stego.encode("utf-8"))
+    assert r["found"] is True
+
+
+def test_cjk_homoglyph_detector_composes():
+    stego = text_core.encode(COVERS["cjk_homoglyph"], SECRET, "cjk_homoglyph")
+    r = at.detect_cjk_homoglyph_steg(stego.encode("utf-8"))
     assert r["found"] is True
 
 
@@ -277,9 +301,14 @@ def test_zero_width_missing_delimiters_returns_empty():
     assert text_core.decode("plain text with no zero-width chars", "zero_width") == ""
 
 
-def test_homoglyph_short_input_returns_empty():
+def test_cyrillic_homoglyph_short_input_returns_empty():
     # Under 16 carrier bits -> length prefix cannot be read; no crash.
-    assert text_core.decode("abc", "homoglyph") == ""
+    assert text_core.decode("abc", "cyrillic_homoglyph") == ""
+
+
+def test_cjk_homoglyph_short_input_returns_empty():
+    # Under 16 carrier bits -> length prefix cannot be read; no crash.
+    assert text_core.decode("abc", "cjk_homoglyph") == ""
 
 
 def test_whitespace_no_trailing_returns_empty():
@@ -415,9 +444,10 @@ def test_decode_unknown_method_raises():
         text_core.decode(PREAMBLE, "bogus")
 
 
-def test_methods_tuple_is_the_fourteen():
+def test_methods_tuple_is_the_fifteen():
     assert set(text_core.METHODS) == {
-        "zero_width", "homoglyph", "whitespace", "invisible_ink",
+        "zero_width", "cyrillic_homoglyph", "cjk_homoglyph",
+        "whitespace", "invisible_ink",
         "variation", "combining", "confusable", "directional", "hangul",
         "mathbold", "braille", "emoji", "skintone", "capitalization",
     }
@@ -446,13 +476,24 @@ def test_zero_width_fixture_from_browser():
     assert text_core.encode(cover, secret, "zero_width") == fixture
 
 
-def test_homoglyph_fixture_from_browser():
-    cover = (FIXTURES / "homoglyph_cover.txt").read_text(encoding="utf-8")
+def test_cyrillic_homoglyph_fixture_from_browser():
+    cover = (FIXTURES / "cyrillic_homoglyph_cover.txt").read_text(encoding="utf-8")
     secret = "flag{h0m0glyphs_l00k_alik3}"
-    fixture = (FIXTURES / "homoglyph_stego.txt").read_text(encoding="utf-8")
+    fixture = (FIXTURES / "cyrillic_homoglyph_stego.txt").read_text(encoding="utf-8")
 
-    assert text_core.decode(fixture, "homoglyph") == secret
-    assert text_core.encode(cover, secret, "homoglyph") == fixture
+    assert text_core.decode(fixture, "cyrillic_homoglyph") == secret
+    assert text_core.encode(cover, secret, "cyrillic_homoglyph") == fixture
+
+
+def test_cjk_homoglyph_fixture_round_trip():
+    # Python-only fixture (no browser reference for cjk_homoglyph).
+    _skip_if_missing("cjk_homoglyph_cover.txt", "cjk_homoglyph_stego.txt")
+    cover = (FIXTURES / "cjk_homoglyph_cover.txt").read_text(encoding="utf-8")
+    secret = "flag{cjk-punct-steg}"
+    fixture = (FIXTURES / "cjk_homoglyph_stego.txt").read_text(encoding="utf-8").rstrip("\n")
+
+    assert text_core.decode(fixture, "cjk_homoglyph") == secret
+    assert text_core.encode(cover, secret, "cjk_homoglyph") == fixture
 
 
 def test_whitespace_fixture_from_browser():

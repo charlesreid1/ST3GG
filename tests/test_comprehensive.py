@@ -36,7 +36,8 @@ from analysis_tools import (
     detect_histogram_shift_steg, detect_multibit_lsb,
     detect_base64, detect_hex_strings, detect_unicode_steg,
     detect_whitespace_steg,
-    detect_homoglyph_steg, detect_variation_selector_steg,
+    detect_cyrillic_homoglyph_steg, detect_cjk_homoglyph_steg,
+    detect_variation_selector_steg,
     detect_combining_mark_steg, detect_confusable_whitespace,
     detect_emoji_steg, detect_capitalization_steg,
     decode_braille, decode_directional_override, decode_hangul_filler,
@@ -104,7 +105,8 @@ T("count>=48", len(tools) >= 48, f"{len(tools)}")
 for t in ['audio_lsb_decode','pcap_decode','zip_decode','tar_decode','gzip_decode','sqlite_decode',
     'pdf_decode','jpeg_decode','svg_decode','gif_analysis','bmp_analysis','generic_image_lsb_decode',
     'detect_pvd_steg','detect_histogram_shift_steg','detect_multibit_lsb',
-    'detect_homoglyph_steg','detect_variation_selector_steg','detect_combining_mark_steg',
+    'detect_cyrillic_homoglyph_steg','detect_cjk_homoglyph_steg',
+    'detect_variation_selector_steg','detect_combining_mark_steg',
     'detect_confusable_whitespace','detect_emoji_steg','detect_capitalization_steg',
     'decode_braille','decode_directional_override','decode_hangul_filler',
     'decode_math_alphanumeric','decode_emoji_skin_tone','png_full_analysis']:
@@ -162,7 +164,7 @@ for f, d in [('example_hidden.py','Py'),('example_hidden.js','JS'),('example_hid
     ('example_hidden.css','CSS'),('example_hidden.sql','SQL'),('example_hidden.tex','TeX')]:
     T(d, secret in (EXAMPLES/f).read_bytes() or secret_b64 in (EXAMPLES/f).read_bytes())
 print("TEST 11: Unicode/Text Steg")
-for f, fn, d in [('example_zero_width.txt',detect_unicode_steg,'ZW'),('example_homoglyph.txt',detect_homoglyph_steg,'Homo'),
+for f, fn, d in [('example_zero_width.txt',detect_unicode_steg,'ZW'),('example_cyrillic_homoglyph.txt',detect_cyrillic_homoglyph_steg,'CyrHomo'),('example_cjk_homoglyph.txt',detect_cjk_homoglyph_steg,'CjkHomo'),
     ('example_variation_selector.txt',detect_variation_selector_steg,'VS'),('example_combining_diacritics.txt',detect_combining_mark_steg,'CGJ'),
     ('example_confusable_whitespace.txt',detect_confusable_whitespace,'CWS'),('example_emoji_substitution.txt',detect_emoji_steg,'Emoji'),
     ('example_capitalization.txt',detect_capitalization_steg,'Caps'),('example_braille.txt',decode_braille,'Braille'),

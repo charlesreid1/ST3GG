@@ -15,7 +15,7 @@ Every transport has a **canonical form** it treats as "the real message." Anythi
 - **Terminal stdout + manual mouse-copy** canonicalizes to the *visible glyph stream*. → Kills zero-width, VS, combining marks. `pbcopy` / `xclip` / `clip.exe` bypass the canonicalization by preserving the byte stream directly.
 - **JPEG re-encode / WhatsApp photo / Instagram** canonicalize to a *perceptual approximation*. → Kills LSB, high-nibble embed, direct pixel overwrite. May preserve DCT-robust hides and spread-spectrum watermarks.
 - **Email SMTP / raw HTTP / GitHub upload / Telegram-as-file** canonicalize to *the file bytes*. → Everything survives; this is the happy path.
-- **Aggressive Unicode normalizers** (some search boxes, some DBs, some sanitizers) canonicalize to *NFC/NFKC*. → Kills homoglyph (Cyrillic `а` normalizes to Latin `a`), some VS, combining marks.
+- **Aggressive Unicode normalizers** (some search boxes, some DBs, some sanitizers) canonicalize to *NFC/NFKC*. → Kills cyrillic_homoglyph (Cyrillic `а` normalizes to Latin `a`) and cjk_homoglyph (fullwidth `，` normalizes to ASCII `,`), some VS, combining marks.
 
 Read every cell as: "does this transport's canonical form sit above or below the layer this technique hides in?"
 
@@ -40,7 +40,7 @@ Every confirmed cell should link to or reference the specific test that confirme
 - **JPEG LSB / DCT (F5, jsteg, outguess)** — payload in JPEG quantized DCT coefficients.
 - **JPEG EXIF/XMP/IPTC** — payload in JPEG metadata blocks.
 - **JPEG trailing bytes (after EOI)** — appended data past the JPEG end marker.
-- **Unicode zero-width / homoglyph** — payload as zero-width chars or Latin↔Cyrillic swaps in text.
+- **Unicode zero-width / homoglyph** — payload as zero-width chars, Latin↔Cyrillic letter swaps (cyrillic_homoglyph), or ASCII↔CJK-fullwidth punctuation swaps (cjk_homoglyph) in text.
 - **Emoji tag sequences (U+E0020–E007F)** — payload as tag characters appended to a base emoji (the "black flag with tags" trick).
 - **Emoji variation selectors** — payload as VS characters (U+FE00–FE0F, U+E0100–E01EF) on emoji or letters.
 - **Whitespace steg (SNOW)** — payload as trailing spaces / tab-vs-space patterns in text.
