@@ -401,7 +401,7 @@ ST3GG/
 ├── tui.py                  # Terminal UI (Textual)
 ├── webui.py                # Web UI (NiceGUI)
 ├── app.py                  # Core application logic
-├── injector.py             # Metadata & filename injection
+├── transforms_core.py      # Pure text transforms (zalgo, leetspeak, fullwidth)
 ├── ascii_art.py            # Terminal art & animations
 ├── f5stego-lib.js          # F5 JPEG steganography (browser)
 ├── test_examples.py        # Test suite (200+ tests)

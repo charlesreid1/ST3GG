@@ -136,7 +136,7 @@ def test_compose_image_jailbreak_filename(medium_carrier):
 
 
 def test_compose_image_jailbreak_metadata(medium_carrier):
-    from injector import extract_text_chunks
+    from img_core import extract_text_chunks
 
     payload = compose_image_jailbreak(
         "developer_mode",
@@ -214,7 +214,7 @@ def test_detect_injection_filename_negative():
 
 
 def test_detect_jailbreak_in_chunks_positive(medium_carrier):
-    from injector import inject_text_chunk
+    from img_core import inject_text_chunk
 
     png = _png_bytes(medium_carrier)
     body = get_jailbreak_template("pliny_classic")
@@ -227,7 +227,7 @@ def test_detect_jailbreak_in_chunks_positive(medium_carrier):
 
 
 def test_detect_jailbreak_in_chunks_negative(medium_carrier):
-    from injector import inject_text_chunk
+    from img_core import inject_text_chunk
 
     png = _png_bytes(medium_carrier)
     png = inject_text_chunk(png, "Comment", "just a friendly photo of a cat")

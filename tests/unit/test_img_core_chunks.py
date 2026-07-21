@@ -1,7 +1,8 @@
-"""injector: tEXt / iTXt / private chunk inject + read-back.
+"""img_core PNG chunk I/O: tEXt / iTXt / private chunk inject + read-back.
 
-Jailbreak template registry and filename-generation tests moved to
-`test_jailbreak_core.py`.
+Previously lived in ``test_injector.py`` when these functions were part of
+``injector.py``. Jailbreak template registry and filename-generation tests
+are in ``test_jailbreak_core.py``.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import io
 import pytest
 from PIL import Image
 
-from injector import (
+from img_core import (
     extract_text_chunks,
     inject_itxt_chunk,
     inject_metadata_pil,

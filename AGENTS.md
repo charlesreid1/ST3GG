@@ -8,7 +8,7 @@ ST3GG is a steganography toolkit covering three carrier families as equal peers:
 
 ## Two agent entry points
 
-Both wrap the same underlying library (`img_core`, `text_core`, `analysis_tools`, `injector`, `crypto`). Pick one:
+Both wrap the same underlying library (`img_core`, `text_core`, `analysis_tools`, `transforms_core`, `crypto`). Pick one:
 
 ### `stegg-cli` — subprocess CLI
 Skill: `skills/stegg-cli/SKILL.md`. Invoke as `python3 stegg_cli.py <command>` (or `stegg-cli` after install). JSON output. **Prefer this for routine encode/decode/analyze** — output stays out of LLM context.
@@ -29,7 +29,7 @@ Rule of thumb: CLI first for context hygiene, MCP for inline reasoning.
 - `img_core.py` — image LSB encode/decode + config + capacity math
 - `text_core.py` — text/emoji encode/decode (14 methods)
 - `analysis_tools.py` — 264+ detection/analysis functions
-- `injector.py` — PNG chunk + EXIF injection
+- `transforms_core.py` — pure text transforms (zalgo, leetspeak, fullwidth) for pre-obfuscation
 - `crypto.py` — optional AES-256-GCM
 - `cli.py`, `stegg_cli.py` — main CLI + subprocess-friendly JSON CLI
 - `tui.py`, `webui.py` — optional Textual + NiceGUI UIs

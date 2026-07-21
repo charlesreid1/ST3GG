@@ -42,7 +42,7 @@ from jailbreak_core import (
     get_jailbreak_names, compose_image_jailbreak,
     detect_full_injection_package,
 )
-from injector import (
+from img_core import (
     inject_text_chunk, inject_itxt_chunk,
     inject_private_chunk, read_png_chunks, extract_text_chunks,
     inject_metadata_pil,

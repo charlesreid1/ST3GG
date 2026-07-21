@@ -62,7 +62,7 @@ from jailbreak_core import (
     get_jailbreak_template, get_jailbreak_names,
     compose_image_jailbreak, detect_full_injection_package,
 )
-from injector import zalgo_text, leetspeak
+from transforms_core import zalgo_text, leetspeak
 from ascii_art import (
     BANNER, BANNER_SMALL, STEGOSAURUS_ASCII_SIMPLE, STEGOSAURUS_SMALL,
     STATUS, FOOTER, TAGLINES, section_header, channel_bar, COLORS

@@ -14,7 +14,7 @@ import io
 import pytest
 from PIL import Image
 
-from injector import extract_text_chunks, inject_text_chunk
+from img_core import extract_text_chunks, inject_text_chunk
 from img_core import create_config, decode, encode
 from jailbreak_core import compose_image_jailbreak, detect_full_injection_package
 

@@ -34,7 +34,7 @@ from jailbreak_core import (
     get_filename_template_names as get_template_names,
     get_jailbreak_template, get_jailbreak_names,
 )
-from injector import zalgo_text
+from transforms_core import zalgo_text
 from ascii_art import STEGOSAURUS_SMALL, TAGLINES, BANNER_SMALL
 
 

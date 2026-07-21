@@ -11,7 +11,6 @@ from typing import Any
 from PIL import Image
 
 import analysis_tools as at
-import injector
 import img_core
 
 from ._common import (
@@ -46,7 +45,7 @@ async def execute_read_metadata(path: str, **_kw) -> str:
             result["pil_error"] = str(exc)
 
         try:
-            chunks = injector.extract_text_chunks(data)
+            chunks = img_core.extract_text_chunks(data)
             if chunks:
                 result["png_text_chunks"] = chunks
         except Exception as exc:
@@ -137,7 +136,7 @@ async def execute_read_png_chunks(path: str, **_kw) -> str:
         return err
 
     def work():
-        chunks = injector.read_png_chunks(data)
+        chunks = img_core.read_png_chunks(data)
         summary = []
         for c in chunks:
             entry = {
@@ -470,19 +469,19 @@ async def execute_encode_metadata(
         if ct == "tEXt":
             if not keyword:
                 return {"__err__": "tEXt chunks require a 'keyword' argument"}
-            return injector.inject_text_chunk(data, keyword, value, compressed=False)
+            return img_core.inject_text_chunk(data, keyword, value, compressed=False)
         if ct == "zTXt":
             if not keyword:
                 return {"__err__": "zTXt chunks require a 'keyword' argument"}
-            return injector.inject_text_chunk(data, keyword, value, compressed=True)
+            return img_core.inject_text_chunk(data, keyword, value, compressed=True)
         if ct == "iTXt":
             if not keyword:
                 return {"__err__": "iTXt chunks require a 'keyword' argument"}
-            return injector.inject_itxt_chunk(data, keyword, value)
+            return img_core.inject_itxt_chunk(data, keyword, value)
         if ct == "private":
             if not private_chunk_name or len(private_chunk_name) != 4:
                 return {"__err__": "private chunks require a 4-character 'private_chunk_name'"}
-            return injector.inject_private_chunk(data, private_chunk_name, value.encode("utf-8"))
+            return img_core.inject_private_chunk(data, private_chunk_name, value.encode("utf-8"))
         return {"__err__": f"unknown chunk_type '{ct}'. Use one of: tEXt, iTXt, zTXt, private."}
 
     try:
@@ -985,7 +984,7 @@ async def execute_inject_exif(
 
     def work():
         img = Image.open(io.BytesIO(data))
-        _, png_bytes = injector.inject_metadata_pil(img, metadata)
+        _, png_bytes = img_core.inject_metadata_pil(img, metadata)
         return {
             "encoded_bytes": png_bytes,
             "keys": sorted(metadata.keys()),

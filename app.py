@@ -26,10 +26,10 @@ from jailbreak_core import (
     get_jailbreak_template, get_jailbreak_names,
     create_full_injection_package, JAILBREAK_TEMPLATES,
 )
-from injector import (
+from img_core import (
     inject_metadata_pil, inject_text_chunk, read_png_chunks,
-    zalgo_text, leetspeak,
 )
+from transforms_core import zalgo_text, leetspeak
 
 # Page config
 st.set_page_config(

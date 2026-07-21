@@ -18,7 +18,6 @@ import numpy as np
 import pytest
 from PIL import Image
 
-import injector
 import img_core
 
 from st3ggmcp.tools import TOOL_EXECUTORS, TOOL_SCHEMAS
@@ -164,8 +163,8 @@ def test_inject_exif_roundtrip(carrier_png, tmp_path):
     assert Path(result["output_path"]).exists()
     assert sorted(result["keys"]) == sorted(metadata.keys())
 
-    # The injected chunks should be readable back via injector.extract_text_chunks.
-    read_back = injector.extract_text_chunks(out_path.read_bytes())
+    # The injected chunks should be readable back via img_core.extract_text_chunks.
+    read_back = img_core.extract_text_chunks(out_path.read_bytes())
     for k, v in metadata.items():
         assert read_back.get(k) == v
 

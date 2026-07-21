@@ -17,8 +17,9 @@ This module owns:
       ``unicode_tag_smuggling`` (surfaces both the smuggling channel and
       any known template body carried inside it).
 
-Low-level PNG chunk I/O and text effects (Zalgo, leetspeak) remain in
-`injector.py`; this module composes those primitives.
+Low-level PNG chunk I/O lives in ``img_core.py``; pure text effects
+(Zalgo, leetspeak, fullwidth) live in ``transforms_core.py``. This module
+composes those primitives.
 """
 
 from __future__ import annotations
@@ -373,8 +374,7 @@ def compose_image_jailbreak(
     filename_seed: Optional[int] = None,
 ) -> JailbreakPayload:
     """Create a full image-based jailbreak package in one call."""
-    from img_core import create_config, encode  # local import to avoid cycles
-    import injector as _inj
+    from img_core import create_config, encode, inject_text_chunk  # local import to avoid cycles
 
     body = _template_body(jailbreak_template)
     payload_bytes = body.encode("utf-8")
@@ -401,7 +401,7 @@ def compose_image_jailbreak(
             "Instructions": preview,
         }
         for keyword, text in metadata.items():
-            png_bytes = _inj.inject_text_chunk(png_bytes, keyword, text)
+            png_bytes = inject_text_chunk(png_bytes, keyword, text)
 
     if trailing_payload:
         png_bytes = png_bytes + trailing_payload
@@ -701,10 +701,10 @@ def detect_injection_filename(filename: str) -> Dict[str, Any]:
 
 def detect_jailbreak_in_chunks(png_data: bytes) -> Dict[str, Any]:
     """Scan PNG text chunks for jailbreak template fingerprints."""
-    import injector as _inj
+    from img_core import extract_text_chunks
 
     try:
-        chunks = _inj.extract_text_chunks(png_data)
+        chunks = extract_text_chunks(png_data)
     except Exception as exc:
         return {"detected": False, "found": False, "error": str(exc), "hits": []}
 
