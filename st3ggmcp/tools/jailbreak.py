@@ -11,11 +11,13 @@ from typing import Any
 from PIL import Image
 
 import jailbreak_core
+import transforms_core
 
 from ._common import (
     TOOL_TIMEOUT,
     default_output_path,
     read_bytes,
+    resolve_text_input,
     run_sync,
     truncate_json,
 )
@@ -123,10 +125,118 @@ async def execute_jailbreak_detect(path: str, full: bool = True, **_kw) -> str:
     return truncate_json(result)
 
 
+async def execute_jailbreak_compose_text(
+    template: str = "dan_classic",
+    cover_text: str | None = None,
+    cover_path: str | None = None,
+    stego_method: str = "zero_width",
+    obfuscation: list[str] | None = None,
+    output_path: str | None = None,
+    **_kw,
+) -> str:
+    cover, err = resolve_text_input(cover_text, cover_path, "cover_text")
+    if err:
+        return err
+
+    def work():
+        payload = jailbreak_core.compose_text_jailbreak(
+            template,
+            cover,
+            stego_method=stego_method,
+            obfuscation=obfuscation,
+        )
+        result: dict[str, Any] = {
+            "template": template,
+            "stego_method": stego_method,
+            "obfuscation": obfuscation or [],
+            "technique_summary": payload.technique_summary,
+            "carrier_text_length": len(payload.carrier_text or ""),
+            "carrier_text_preview": (payload.carrier_text or "")[:400],
+        }
+        if output_path:
+            Path(output_path).write_text(payload.carrier_text or "", encoding="utf-8")
+            result["output_path"] = output_path
+        return result
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_jailbreak_compose_text timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("jailbreak_compose_text failed")
+        return f"stegg_jailbreak_compose_text error: {exc}"
+    return truncate_json(result)
+
+
+async def execute_jailbreak_compose_unicode_tag(
+    template: str = "dan_classic",
+    cover_text: str | None = None,
+    cover_path: str | None = None,
+    base_emoji: str | None = None,
+    obfuscation: list[str] | None = None,
+    output_path: str | None = None,
+    **_kw,
+) -> str:
+    cover, err = resolve_text_input(cover_text, cover_path, "cover_text")
+    if err:
+        return err
+
+    def work():
+        kwargs: dict[str, Any] = {"obfuscation": obfuscation}
+        if base_emoji is not None:
+            kwargs["base_emoji"] = base_emoji
+        payload = jailbreak_core.compose_unicode_tag_jailbreak(
+            template,
+            cover,
+            **kwargs,
+        )
+        result: dict[str, Any] = {
+            "template": template,
+            "base_emoji": base_emoji or jailbreak_core.EMOJI_TAG_BASE,
+            "obfuscation": obfuscation or [],
+            "technique_summary": payload.technique_summary,
+            "carrier_text_length": len(payload.carrier_text or ""),
+            "carrier_text_preview": (payload.carrier_text or "")[:400],
+        }
+        if output_path:
+            Path(output_path).write_text(payload.carrier_text or "", encoding="utf-8")
+            result["output_path"] = output_path
+        return result
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_jailbreak_compose_unicode_tag timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("jailbreak_compose_unicode_tag failed")
+        return f"stegg_jailbreak_compose_unicode_tag error: {exc}"
+    return truncate_json(result)
+
+
+async def execute_transforms_list(**_kw) -> str:
+    def work():
+        return {
+            "transforms": transforms_core.list_transforms(),
+            "count": len(transforms_core.list_transforms()),
+        }
+
+    try:
+        result = await run_sync(work)
+    except asyncio.TimeoutError:
+        return f"stegg_transforms_list timed out after {TOOL_TIMEOUT}s"
+    except Exception as exc:
+        logger.exception("transforms_list failed")
+        return f"stegg_transforms_list error: {exc}"
+    return truncate_json(result)
+
+
 EXECUTORS = {
     "stegg_jailbreak_list": execute_jailbreak_list,
     "stegg_jailbreak_compose_image": execute_jailbreak_compose_image,
+    "stegg_jailbreak_compose_text": execute_jailbreak_compose_text,
+    "stegg_jailbreak_compose_unicode_tag": execute_jailbreak_compose_unicode_tag,
     "stegg_jailbreak_detect": execute_jailbreak_detect,
+    "stegg_transforms_list": execute_transforms_list,
 }
 
 
@@ -167,7 +277,8 @@ SCHEMAS = {
         "description": (
             "Scan an image or text file for jailbreak / prompt-injection "
             "indicators across all vectors (filename, PNG metadata chunks, "
-            "LSB pixel payload, trailing data after IEND, Unicode obfuscation)."
+            "LSB pixel payload, trailing data after IEND, Unicode obfuscation, "
+            "fullwidth-ASCII density)."
         ),
         "inputSchema": {
             "type": "object",
@@ -177,5 +288,62 @@ SCHEMAS = {
             },
             "required": ["path"],
         },
+    },
+    "stegg_jailbreak_compose_text": {
+        "description": (
+            "Hide a jailbreak template inside cover text via Unicode text "
+            "steganography, with an optional ordered obfuscation pre-pipeline "
+            "(zalgo, fullwidth, leetspeak, ...) applied to the template body "
+            "before stego encoding. Order matters — match the chain to the "
+            "target transport (see TRANSPORT_MATRIX.md). Use stegg_transforms_list "
+            "to enumerate available obfuscation names."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "template": {"type": "string", "description": "Jailbreak template name (default: dan_classic)."},
+                "cover_text": {"type": "string", "description": "Inline cover text carrier."},
+                "cover_path": {"type": "string", "description": "Path to a UTF-8 file used as cover text (used if cover_text is not supplied)."},
+                "stego_method": {"type": "string", "description": "text_core encoder to use (default: zero_width)."},
+                "obfuscation": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Ordered list of transform names applied to the template body before stego encoding.",
+                },
+                "output_path": {"type": "string", "description": "Optional path to write the resulting carrier text."},
+            },
+        },
+    },
+    "stegg_jailbreak_compose_unicode_tag": {
+        "description": (
+            "Hide a jailbreak template as a Unicode Tag run (U+E00XX) attached "
+            "to a base emoji — the 2025 'hidden emoji' prompt-injection "
+            "technique. Payload is constrained to printable ASCII; combine "
+            "with `obfuscation` cautiously (fullwidth before tag encoding will "
+            "raise because the transformed body is no longer printable ASCII)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "template": {"type": "string", "description": "Jailbreak template name (default: dan_classic)."},
+                "cover_text": {"type": "string", "description": "Inline cover text carrier."},
+                "cover_path": {"type": "string", "description": "Path to a UTF-8 file used as cover text (used if cover_text is not supplied)."},
+                "base_emoji": {"type": "string", "description": "Emoji the tag run attaches to (default: waving black flag)."},
+                "obfuscation": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Ordered list of transform names applied to the template body before tag encoding.",
+                },
+                "output_path": {"type": "string", "description": "Optional path to write the resulting carrier text."},
+            },
+        },
+    },
+    "stegg_transforms_list": {
+        "description": (
+            "List registered text transforms from transforms_core — the set of "
+            "names accepted by the `obfuscation` parameter on the jailbreak "
+            "compose_text / compose_unicode_tag tools."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
     },
 }

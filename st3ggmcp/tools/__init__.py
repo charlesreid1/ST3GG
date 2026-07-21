@@ -41,8 +41,11 @@ from .text import (  # noqa: F401
 from .triage import execute_triage  # noqa: F401
 from .jailbreak import (  # noqa: F401
     execute_jailbreak_compose_image,
+    execute_jailbreak_compose_text,
+    execute_jailbreak_compose_unicode_tag,
     execute_jailbreak_detect,
     execute_jailbreak_list,
+    execute_transforms_list,
 )
 
 _MODULES = (image, triage, text, meta, network, jailbreak)
